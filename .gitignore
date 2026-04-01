@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────
+# FinSight-RAG — Git Ignore Rules
+# ─────────────────────────────────────────────
+
+# CRITICAL: Never commit secrets
+.env
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Data — raw PDFs are large; use git-lfs or
+# document in README where to download them
+data/raw/
+data/chroma_db/
+data/processed/
+
+# Logs (generated at runtime)
+logs/*.log
+logs/*.csv
+
+# IDE
+.vscode/
+.idea/
+*.DS_Store
+
+# Evaluation outputs (generated, not source)
+evaluation/results/*.json
+evaluation/results/*.csv
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+
+# Agent state
+data/agent_state.db
+*.db
+
+# Student ID (API key)
+ID.txt
+
+# Scraped GitHub docs (large, re-generate with scraper.py)
+data/raw/github_docs/
