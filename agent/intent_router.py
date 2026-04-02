@@ -77,6 +77,12 @@ OUT_OF_SCOPE_PATTERNS = [
     r"\b(celebrity|actor|movie|netflix|spotify)\b",
 ]
 
+# ── NEW: specific ticket close ───────────
+CLOSE_SINGLE_TICKET_PATTERNS = [
+    r"\bclose\s+(ticket\s+)?(TKT[-\s]?\d+)\b",
+    r"\b(TKT[-\s]?\d+)\s*(please)?\s*close\b",
+]
+
 CLOSE_TICKET_PATTERNS = [
     r"\bclose\s+(all\s+)?(my\s+)?(active\s+)?tickets?\b",
     r"\bmark\s+(all\s+)?tickets?\s+(as\s+)?closed\b",
@@ -93,6 +99,12 @@ def _regex_check(message: str) -> str | None:
     for pattern in INJECTION_PATTERNS:
         if re.search(pattern, msg_lower):
             return "prompt_injection"
+        
+    # ── NEW: specific ticket close — must come BEFORE close_all ───────────
+    for pattern in CLOSE_SINGLE_TICKET_PATTERNS:
+        if re.search(pattern, message, re.IGNORECASE):  # use original message to match TKT-001 casing
+            return "close_ticket_by_id"
+    # ─────────────────────────────────────────────────────────────────────
     
     for pattern in CLOSE_TICKET_PATTERNS:
         if re.search(pattern, msg_lower):
@@ -183,10 +195,12 @@ class IntentRouter:
             confidence = float(parsed.get("confidence", 0.8))
 
             # Validate intent is one of our known types
+            # ── NEW: add specific ticket close ───────────
             valid_intents = {
                 "rag_query", "create_ticket", "check_ticket",
-                "check_billing", "close_tickets", "out_of_scope", "prompt_injection"
+                "check_billing", "close_tickets", "close_ticket_by_id", "out_of_scope", "prompt_injection"
             }
+            
             if intent not in valid_intents:
                 intent = "rag_query"
 

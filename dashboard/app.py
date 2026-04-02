@@ -33,6 +33,8 @@ from agent.actions import (
     handle_check_ticket,
     handle_check_billing,
     is_ticket_flow_active,
+    handle_close_tickets,           # ← add
+    handle_close_ticket_by_id,      # ← add
 )
 from agent.guardrails import get_guardrail_response, handle_insufficient_evidence
 
@@ -136,15 +138,25 @@ def process_message(
             prompts=prompts,
         )
 
+    # Version 1: Check ticket only returns ticket status without response generation
+    # elif intent == "check_ticket":
+    #     response = handle_check_ticket(user_input, session_state)
+
+    # Version 2: Check ticket returns both ticket status and response generation
     elif intent == "check_ticket":
-        response = handle_check_ticket(user_input, session_state)
+        response = handle_check_ticket(user_input, session_state, rag_chain)
 
     elif intent == "check_billing":
         response = handle_check_billing(user_input)
+
+    # Added: Close ticket by ID intent
+    elif intent == "close_ticket_by_id":
+        response = handle_close_ticket_by_id(user_input, session_state)
     
     elif intent == "close_tickets":
         from agent.actions import handle_close_tickets
         response = handle_close_tickets(user_input, session_state)
+    
 
     else:
         # Default: RAG query
@@ -183,25 +195,43 @@ def main():
     col_chat, col_side = st.columns([3, 1])
 
     with col_side:
-        st.markdown("### 🐙 GitHub Docs Agent")
-        st.caption(f"Session: `{session_id}`")
-        st.divider()
+    #     st.markdown("### 🐙 GitHub Docs Agent")
+    #     st.caption(f"Session: `{session_id}`")
+    #     st.divider()
 
-        # Ticket panel
-        st.markdown("#### 🎫 Your Tickets")
-        tickets = session_state.list_tickets()
-        if tickets:
-            for t in tickets[:5]:
-                status_icon = "📂" if t["status"] == "Open" else "✅"
-                pri_icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(t["priority"], "⚪")
-                st.markdown(
-                    f"**{t['ticket_id']}** {status_icon}  \n"
-                    f"{t['category']} {pri_icon}  \n"
-                    f"*{t['created_at'][:10]}*"
-                )
-                st.divider()
+    #     # Ticket panel
+    #     st.markdown("#### 🎫 Your Tickets")
+    #     tickets = session_state.list_tickets()
+    #     if tickets:
+    #         for t in tickets[:5]:
+    #             status_icon = "📂" if t["status"] == "Open" else "✅"
+    #             pri_icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(t["priority"], "⚪")
+    #             st.markdown(
+    #                 f"**{t['ticket_id']}** {status_icon}  \n"
+    #                 f"{t['category']} {pri_icon}  \n"
+    #                 f"*{t['created_at'][:10]}*"
+    #             )
+    #             st.divider()
+    #     else:
+    #         st.caption("No tickets yet. Say *\"Create a support ticket\"* to start.")
+
+    # Replaced with Ticket panel
+        st.markdown("#### 🎫 Open Tickets")
+        open_tickets = session_state.get_open_tickets()
+        if not open_tickets:
+            st.caption("No open tickets. Say *\"Create a support ticket\"* to start.")
         else:
-            st.caption("No tickets yet. Say *\"Create a support ticket\"* to start.")
+            for ticket in open_tickets:
+                pri_icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(ticket["priority"], "⚪")
+                with st.expander(f"{ticket['ticket_id']} — {ticket['category']}"):
+                    st.write(f"**Priority:** {pri_icon} {ticket['priority']}")
+                    st.write(f"**Description:** {ticket['description'][:80]}...")
+                    st.write(f"**Created:** {ticket['created_at'][:10]}")
+                    if st.button(f"🔒 Close {ticket['ticket_id']}", key=f"close_{ticket['ticket_id']}"):
+                        result = session_state.close_ticket_by_id(ticket["ticket_id"])
+                        st.toast(result["message"])
+                        st.rerun()
+
 
         st.divider()
 

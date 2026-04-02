@@ -204,7 +204,7 @@ class RAGChain:
         if not supported:
             log_path = Path(self.settings.log_dir) / "declined_queries.log"
             log_path.parent.mkdir(exist_ok=True)
-            with open(log_path, "a") as f:
+            with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "question": question,
                     "answer_preview": answer[:100],

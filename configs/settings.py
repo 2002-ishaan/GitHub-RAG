@@ -116,7 +116,7 @@ def load_settings() -> Settings:
 def load_prompts() -> dict:
     """Load prompt templates from the YAML file."""
     prompts_path = CONFIGS_DIR / "prompts.yaml"
-    with open(prompts_path, "r") as f:
+    with open(prompts_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 

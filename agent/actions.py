@@ -202,25 +202,77 @@ def is_ticket_flow_active(session_id: str) -> bool:
 
 # ── Action 2: Check Ticket Status (Single-turn) ────────────────────────────────
 
-def handle_check_ticket(user_message: str, session_state) -> str:
-    """
-    Look up a ticket by ID.
-    Extracts ticket ID from the message (e.g. 'TKT-001', 'tkt001').
-    """
-    # Try to extract ticket ID from message
+#--------------------Version 1 without RAG response ----------------------
+# def handle_check_ticket(user_message: str, session_state) -> str:
+#     """
+#     Look up a ticket by ID.
+#     Extracts ticket ID from the message (e.g. 'TKT-001', 'tkt001').
+#     """
+#     # Try to extract ticket ID from message
+#     ticket_id = None
+
+#     patterns = [
+#         r"\b(TKT[-\s]?\d+)\b",   # TKT-001 or TKT 001
+#         r"\b(tkt[-\s]?\d+)\b",   # lowercase
+#         r"\bticket\s+#?(\d+)\b", # "ticket 1" or "ticket #1"
+#     ]
+
+#     for pattern in patterns:
+#         match = re.search(pattern, user_message, re.IGNORECASE)
+#         if match:
+#             raw = match.group(1).upper().replace(" ", "-")
+#             # Normalise: TKT001 → TKT-001
+#             ticket_id = re.sub(r"TKT(\d+)", r"TKT-\1", raw)
+#             break
+
+#     if not ticket_id:
+#         return (
+#             "Please provide a ticket ID. For example:\n"
+#             "*\"Check ticket TKT-001\"*"
+#         )
+
+#     ticket = session_state.get_ticket(ticket_id)
+
+#     if not ticket:
+#         return (
+#             f"❌ Ticket **{ticket_id}** was not found.\n\n"
+#             f"Double-check the ticket ID or create a new ticket by saying "
+#             f"*\"Create a support ticket\"*."
+#         )
+
+#     # Format the response nicely
+#     priority_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(
+#         ticket["priority"], "⚪"
+#     )
+#     status_emoji = {"Open": "📂", "Resolved": "✅", "Closed": "🔒"}.get(
+#         ticket["status"], "📂"
+#     )
+
+#     return (
+#         f"## Ticket {ticket['ticket_id']}\n\n"
+#         f"| Field | Value |\n"
+#         f"|---|---|\n"
+#         f"| Status | {status_emoji} {ticket['status']} |\n"
+#         f"| Category | {ticket['category']} |\n"
+#         f"| Priority | {priority_emoji} {ticket['priority']} |\n"
+#         f"| Created | {ticket['created_at'][:10]} |\n\n"
+#         f"**Description:**\n{ticket['description']}"
+#     )
+
+#--------------------Version 2 with RAG response ----------------------
+def handle_check_ticket(user_message: str, session_state, rag_chain=None) -> str:
     ticket_id = None
 
     patterns = [
-        r"\b(TKT[-\s]?\d+)\b",   # TKT-001 or TKT 001
-        r"\b(tkt[-\s]?\d+)\b",   # lowercase
-        r"\bticket\s+#?(\d+)\b", # "ticket 1" or "ticket #1"
+        r"\b(TKT[-\s]?\d+)\b",
+        r"\b(tkt[-\s]?\d+)\b",
+        r"\bticket\s+#?(\d+)\b",
     ]
 
     for pattern in patterns:
         match = re.search(pattern, user_message, re.IGNORECASE)
         if match:
             raw = match.group(1).upper().replace(" ", "-")
-            # Normalise: TKT001 → TKT-001
             ticket_id = re.sub(r"TKT(\d+)", r"TKT-\1", raw)
             break
 
@@ -239,15 +291,11 @@ def handle_check_ticket(user_message: str, session_state) -> str:
             f"*\"Create a support ticket\"*."
         )
 
-    # Format the response nicely
-    priority_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(
-        ticket["priority"], "⚪"
-    )
-    status_emoji = {"Open": "📂", "Resolved": "✅", "Closed": "🔒"}.get(
-        ticket["status"], "📂"
-    )
+    priority_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(ticket["priority"], "⚪")
+    status_emoji = {"Open": "📂", "Resolved": "✅", "Closed": "🔒"}.get(ticket["status"], "📂")
 
-    return (
+    # ── Save to variable instead of returning immediately ──
+    ticket_response = (
         f"## Ticket {ticket['ticket_id']}\n\n"
         f"| Field | Value |\n"
         f"|---|---|\n"
@@ -258,6 +306,17 @@ def handle_check_ticket(user_message: str, session_state) -> str:
         f"**Description:**\n{ticket['description']}"
     )
 
+    # ── Append RAG guidance if available ──────────────────
+    if rag_chain and ticket:
+        rag_response = rag_chain.ask(question=ticket["description"])
+        if rag_response.is_supported:
+            ticket_response += (
+                "\n\n---\n\n"
+                "💡 **Suggested guidance based on your issue:**\n\n"
+                + rag_response.formatted_answer()
+            )
+
+    return ticket_response  # ← single return at the end
 
 # ── Action 3: Check Billing Plan (Single-turn) ─────────────────────────────────
 
@@ -308,6 +367,30 @@ def handle_check_billing(user_message: str) -> str:
         f"{note}\n\n"
         f"For more details, visit: https://github.com/pricing"
     )
+
+# close tickets by id
+def handle_close_ticket_by_id(user_message: str, session_state) -> str:
+    """Close a single ticket by ID extracted from the message."""
+    ticket_id = None
+    patterns = [
+        r"\b(TKT[-\s]?\d+)\b",
+        r"\b(tkt[-\s]?\d+)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, user_message, re.IGNORECASE)
+        if match:
+            raw = match.group(1).upper().replace(" ", "-")
+            ticket_id = re.sub(r"TKT(\d+)", r"TKT-\1", raw)
+            break
+
+    if not ticket_id:
+        return (
+            "Please specify a ticket ID. For example:\n"
+            "*\"Close ticket TKT-001\"*"
+        )
+
+    result = session_state.close_ticket_by_id(ticket_id)
+    return result["message"]
 
 def handle_close_tickets(user_message: str, session_state) -> str:
     """Close all open tickets."""

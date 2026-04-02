@@ -197,3 +197,34 @@ class SessionState:
                     (datetime.utcnow().isoformat(),)
                 )
             return result.rowcount
+    
+    # Added: Close a single ticket by ID
+    def close_ticket_by_id(self, ticket_id: str) -> dict:
+        """Close a single ticket by ID. Returns a result dict."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT status FROM tickets WHERE ticket_id = ?",
+                (ticket_id.upper(),)
+            ).fetchone()
+
+            if not row:
+                return {"success": False, "message": f"❌ Ticket **{ticket_id}** was not found."}
+            if row["status"] == "Closed":
+                return {"success": False, "message": f"ℹ️ Ticket **{ticket_id}** is already closed."}
+
+            conn.execute(
+                "UPDATE tickets SET status='Closed', updated_at=? WHERE ticket_id=?",
+                (datetime.utcnow().isoformat(), ticket_id.upper())
+            )
+
+        logger.info(f"Ticket closed: {ticket_id}")
+        return {"success": True, "message": f"✅ Ticket **{ticket_id}** has been closed successfully."}
+
+    # Added: For sidebar UI display all open tickets
+    def get_open_tickets(self) -> List[dict]:
+        """Return all tickets with status 'Open'."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tickets WHERE status='Open' ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
