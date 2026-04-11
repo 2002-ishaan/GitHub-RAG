@@ -58,6 +58,20 @@ intent_prompt:
     - check_billing: User wants to know about their account plan
       Examples: "What plan am I on?", "Check my billing", "What plan does user X have?"
 
+    - register_user: User explicitly wants to CREATE or REGISTER a new account FOR a specific person.
+      Must contain an action word (register, add, create, onboard) AND reference a person or "for [name]".
+      Examples: "Register a new account for michael", "Add user sarah", "Create account for john",
+                "Register a plan for alice", "Onboard a new user called bob"
+      NOT register_user: "How to open a github account", "How do I create a github account",
+                         "What is a github account", "Can I sign up for github"
+      (those are rag_query — the user wants information, not to register someone)
+
+    - upgrade_plan: User wants to change an existing account's plan
+      Examples: "Upgrade alice to Enterprise", "Downgrade bob to Free", "Change alice's plan to Pro"
+
+    - list_accounts: User wants to see all registered users/accounts
+      Examples: "List all accounts", "Show me all users", "Who is registered?", "Show all billing accounts"
+
     - out_of_scope: Completely unrelated to GitHub
       Examples: "What is the weather?", "Write me a poem", "Tell me a joke"
 
@@ -131,6 +145,29 @@ ticket_prompt:
 
     You can check your ticket status anytime by saying:
     *"Check ticket {ticket_id}"*
+
+# ── Register User Prompts ─────────────────────────────────────────
+register_prompt:
+  collecting_plan: |
+    Great! Let's register **{username}**. Which plan would you like?
+
+    1. **Free** — $0/month · 2,000 Actions min/month · 0.5 GB storage
+    2. **Pro** — $4/month · 3,000 Actions min/month · 2 GB storage
+    3. **Team** — $4/user/mo · 50,000 Actions min/month · 2 GB storage
+    4. **Enterprise** — Custom pricing · 50,000 Actions min/month · 50 GB storage
+
+    Reply with the number or plan name.
+
+  confirmation: |
+    ✅ **Account registered successfully!**
+
+    - **Username:** {username}
+    - **Plan:** {plan} ({price})
+    - **Storage:** {storage_gb} GB
+    - **Actions:** {actions_minutes} min/month
+    - **Joined:** {joined_date}
+
+    Check anytime: *"Check billing for {username}"*
 
 # ── Follow-up Question Suggestions ───────────────────────────────
 followup_prompt:

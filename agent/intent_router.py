@@ -128,10 +128,49 @@ CLOSE_TICKET_PATTERNS = [
     r"\bshut\s+(all\s+)?tickets?\b",
 ]
 
+LIST_ACCOUNTS_PATTERNS = [
+    r"\blist\s+(all\s+)?(users?|accounts?|billing\s+accounts?)\b",
+    r"\bshow\s+(me\s+)?(all\s+)?(users?|accounts?|billing\s+accounts?)\b",
+    r"\ball\s+(users?|accounts?|billing\s+accounts?)\b",
+    r"\bwho\s+(is\s+)?registered\b",
+]
+
+REGISTER_USER_PATTERNS = [
+    # Action verb + anything (up to 25 chars) + "for [name]" — catches "register a plan for sarah"
+    r"\b(register|add|create|onboard|enroll)\b.{0,25}\bfor\s+[a-z][a-z0-9\-]{1,38}\b",
+    # Classic explicit language — register/add/create + account or user
+    r"\bregister\s+(a\s+)?(new\s+)?(user|account)\b",
+    r"\badd\s+(a\s+)?(new\s+)?(user|account)\b",
+    r"\bcreate\s+(a\s+)?(new\s+)?(user|account)\b",
+    r"\bonboard\s+(a\s+)?(new\s+)?(user|account)\b",
+    # sign up only when explicit (not "how do I sign up")
+    r"\bsign\s+up\s+a\s+(new\s+)?(user|account)\b",
+]
+
+# Phrases that indicate an informational/how-to question — skip register patterns for these
+_HOWTO_RE = re.compile(
+    r'\bhow\s+(to|do\s+i|can\s+i|do\s+you|does\s+one)\b'
+    r'|\bwhat\s+(is|are)\b'
+    r'|\bcan\s+i\b'
+    r'|\bwhere\s+(do|can)\b',
+    re.IGNORECASE,
+)
+
+UPGRADE_PLAN_PATTERNS = [
+    r"\bupgrade\s+\w+\s+to\b",
+    r"\bdowngrade\s+\w+\s+to\b",
+    r"\bchange\s+\w[\w\-]*'?s?\s+plan\b",
+    r"\bswitch\s+\w+\s+to\s+(free|pro|team|enterprise)\b",
+    r"\bupgrade\s+(my\s+)?plan\b",
+    r"\bchange\s+(my\s+)?plan\s+to\b",
+    r"\bmove\s+\w+\s+to\s+(free|pro|team|enterprise)\b",
+]
+
 
 def _regex_check(message: str) -> str | None:
     """Fast regex pre-check. Returns intent string or None."""
     msg_lower = message.lower()
+
 
     for pattern in INJECTION_PATTERNS:
         if re.search(pattern, msg_lower):
@@ -146,6 +185,20 @@ def _regex_check(message: str) -> str | None:
     for pattern in CLOSE_TICKET_PATTERNS:
         if re.search(pattern, msg_lower):
             return "close_tickets"
+
+    for pattern in LIST_ACCOUNTS_PATTERNS:
+        if re.search(pattern, msg_lower):
+            return "list_accounts"
+
+    for pattern in UPGRADE_PLAN_PATTERNS:
+        if re.search(pattern, msg_lower):
+            return "upgrade_plan"
+
+    # Skip register patterns for informational / how-to questions
+    if not _HOWTO_RE.search(message):
+        for pattern in REGISTER_USER_PATTERNS:
+            if re.search(pattern, msg_lower):
+                return "register_user"
 
     for pattern in CHECK_TICKET_PATTERNS:
         if re.search(pattern, msg_lower):
@@ -239,7 +292,9 @@ class IntentRouter:
             # ── NEW: add specific ticket close ───────────
             valid_intents = {
                 "rag_query", "create_ticket", "check_ticket",
-                "check_billing", "close_tickets", "close_ticket_by_id", "out_of_scope", "prompt_injection"
+                "check_billing", "close_tickets", "close_ticket_by_id",
+                "register_user", "upgrade_plan", "list_accounts",
+                "out_of_scope", "prompt_injection",
             }
             
             if intent not in valid_intents:

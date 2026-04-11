@@ -35,11 +35,15 @@ from agent.actions import (
     handle_create_ticket,
     handle_check_ticket,
     handle_check_billing,
+    handle_register_user,
+    handle_upgrade_plan,
     is_ticket_flow_active,
+    is_register_flow_active,
     get_ticket_flow_state,
     get_last_created_ticket,
     handle_close_tickets,
     handle_close_ticket_by_id,
+    handle_list_accounts,
 )
 from agent.guardrails import get_guardrail_response, handle_insufficient_evidence
 
@@ -62,6 +66,9 @@ INTENT_LABELS = {
     "prompt_injection":   ("⚠️ Blocked",         "#CF222E", "#FFEBE9", "#FFBCB5"),
     "action_in_progress": ("🎫 Ticket Flow",     "#1A7F37", "#DAFBE1", "#ACEEBB"),
     "close_tickets":      ("🔒 Close Tickets",   "#CF222E", "#FFEBE9", "#FFBCB5"),
+    "register_user":      ("👤 Register User",   "#0969DA", "#DDF4FF", "#B6E3FF"),
+    "upgrade_plan":       ("⚡ Upgrade Plan",    "#9A6700", "#FFF8C5", "#E9C46A"),
+    "list_accounts":      ("📋 List Accounts",   "#0969DA", "#DDF4FF", "#B6E3FF"),
 }
 
 
@@ -180,10 +187,21 @@ def process_message(
             session_state=session_state,
             prompts=prompts,
         )
-        # Save to history
         session_state.append_to_history(session_id, "user", user_input)
         session_state.append_to_history(session_id, "assistant", response)
         return response, "action_in_progress"
+
+    # ── Check if multi-turn register flow is active ────────────────────────
+    if is_register_flow_active(session_id):
+        response = handle_register_user(
+            session_id=session_id,
+            user_message=user_input,
+            session_state=session_state,
+            prompts=prompts,
+        )
+        session_state.append_to_history(session_id, "user", user_input)
+        session_state.append_to_history(session_id, "assistant", response)
+        return response, "register_user"
 
     # ── Classify intent ────────────────────────────────────────────────────
     intent_result = intent_router.classify(user_input)
@@ -215,7 +233,18 @@ def process_message(
         response = handle_check_ticket(user_input, session_state, rag_chain)
 
     elif intent == "check_billing":
-        response = handle_check_billing(user_input)
+        response = handle_check_billing(user_input, session_state)
+
+    elif intent == "register_user":
+        response = handle_register_user(
+            session_id=session_id,
+            user_message=user_input,
+            session_state=session_state,
+            prompts=prompts,
+        )
+
+    elif intent == "upgrade_plan":
+        response = handle_upgrade_plan(user_input, session_state)
 
     # Added: Close ticket by ID intent
     elif intent == "close_ticket_by_id":
@@ -224,7 +253,9 @@ def process_message(
     elif intent == "close_tickets":
         from agent.actions import handle_close_tickets
         response = handle_close_tickets(user_input, session_state)
-    
+
+    elif intent == "list_accounts":
+        response = handle_list_accounts(session_state)
 
     else:
         # Default: RAG query
@@ -254,12 +285,28 @@ _FRUSTRATION_PATTERNS = [
     r"\buseless\b", r"\bdoesn.t\s+make\s+sense\b", r"\bwhy\s+isn.t\s+this\b",
 ]
 
+# Action commands are legitimately repeated (e.g. "check billing" before and after an
+# upgrade). Never treat them as "repeated question" frustration signals.
+_ACTION_COMMAND_RE = re.compile(
+    r'\b(check|view|see)\s+(my\s+)?(billing|plan|subscription)\b'
+    r'|\bcheck\s+(ticket|tkt)\b'
+    r'|\b(upgrade|downgrade|change|switch)\s+\w'
+    r'|\b(register|add|create|onboard)\s+(a\s+)?(new\s+)?(user|account)\b'
+    r'|\blist\s+(all\s+)?(accounts?|users?)\b'
+    r'|\bclose\s+(all\s+)?tickets?\b',
+    re.IGNORECASE,
+)
+
 def _is_frustrated(user_input: str, messages: list) -> bool:
     """Detect frustration via keywords or same question asked twice in recent history."""
     lower = user_input.lower()
     for pat in _FRUSTRATION_PATTERNS:
         if re.search(pat, lower):
             return True
+    # Action commands (billing, upgrade, register, etc.) are naturally repeated —
+    # skip the similarity check so they never get misrouted as frustrated RAG queries.
+    if _ACTION_COMMAND_RE.search(user_input):
+        return False
     # Same question repeated (> 75% similarity) in last 6 user messages
     recent_user = [
         m["content"].lower()[:80]
@@ -299,61 +346,242 @@ def _detect_comparative(question: str):
 
 
 # ── HTML conversation export ──────────────────────────────────────────────────
-def _generate_html_export(messages: list, session_id: str) -> str:
-    """Return a self-contained styled HTML report of the conversation."""
+def _generate_pdf(messages: list, session_id: str) -> bytes:
+    """
+    Generate a PDF of the conversation using fpdf2.
+    - Markdown is converted to readable text (headers, tables, bullets preserved).
+    - Intent badges shown as text labels.
+    - User messages: blue-tinted box. Assistant messages: left-accent block.
+    """
+    import re as _re
+    from fpdf import FPDF
     from datetime import datetime as _dt
-    rows = ""
-    for msg in messages:
-        role    = "You" if msg["role"] == "user" else "Assistant"
-        css_cls = msg["role"]
-        intent  = msg.get("intent", "")
-        badge   = (
-            f'<span class="badge">{intent.replace("_"," ").title()}</span>'
-            if intent and msg["role"] == "assistant" else ""
-        )
-        body = (
-            msg["content"]
-            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace("\n", "<br>")
-        )
-        rows += f"""
-<div class="msg {css_cls}">
-  <div class="role">{role}{badge}</div>
-  <div class="body">{body}</div>
-</div>"""
 
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<title>GitHub Docs Assistant — {session_id}</title>
-<style>
-  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-        max-width:820px;margin:0 auto;padding:24px;color:#1F2328;background:#fff}}
-  h1{{font-size:20px;font-weight:700;border-bottom:2px solid #0969DA;padding-bottom:12px;margin-bottom:4px}}
-  .meta{{color:#656D76;font-size:13px;margin-bottom:24px}}
-  .msg{{margin-bottom:12px;padding:12px 16px;border-radius:8px;line-height:1.6}}
-  .user{{background:#DDF4FF;border:1px solid #B6E3FF}}
-  .assistant{{border-left:3px solid #0969DA;padding-left:14px;background:#FAFAFA}}
-  .role{{font-size:11px;font-weight:700;text-transform:uppercase;color:#656D76;margin-bottom:6px}}
-  .body{{font-size:14px}}
-  .badge{{background:#F6F8FA;border:1px solid #D0D7DE;border-radius:10px;
-          padding:1px 8px;font-size:10px;font-weight:600;margin-left:6px;
-          color:#0969DA;text-transform:none;vertical-align:middle}}
-  .footer{{margin-top:32px;color:#9198A1;font-size:12px;text-align:center;
-           border-top:1px solid #D0D7DE;padding-top:12px}}
-  @media print{{body{{margin:0;padding:12px}}}}
-</style></head>
-<body>
-<h1>🐙 GitHub Documentation Assistant</h1>
-<div class="meta">
-  Session: <code>{session_id}</code> &nbsp;·&nbsp;
-  Exported: {_dt.now().strftime('%Y-%m-%d %H:%M')} &nbsp;·&nbsp;
-  {len(messages)} messages
-</div>
-{rows}
-<div class="footer">
-  Generated by GitHub Docs Assistant &nbsp;·&nbsp; Print this page (Ctrl+P) to save as PDF
-</div>
-</body></html>"""
+    INTENT_LABELS = {
+        "rag_query":          "Knowledge Query",
+        "create_ticket":      "Create Ticket",
+        "check_ticket":       "Check Ticket",
+        "check_billing":      "Billing Check",
+        "out_of_scope":       "Out of Scope",
+        "prompt_injection":   "Blocked",
+        "action_in_progress": "Ticket Flow",
+        "close_tickets":      "Close Tickets",
+        "close_ticket_by_id": "Close Ticket",
+    }
+
+    INTENT_RGB = {
+        "rag_query":          (9,  105, 218),
+        "create_ticket":      (26, 127, 55),
+        "check_ticket":       (110, 64, 201),
+        "check_billing":      (154, 103, 0),
+        "out_of_scope":       (207, 34,  46),
+        "prompt_injection":   (207, 34,  46),
+        "action_in_progress": (26, 127,  55),
+        "close_tickets":      (139, 148, 158),
+        "close_ticket_by_id": (139, 148, 158),
+    }
+
+    def _strip_emoji(t: str) -> str:
+        """
+        Remove any character outside Latin-1 (0x00-0xFF).
+        Helvetica is a core PDF font limited to that range.
+        """
+        return ''.join(c if ord(c) < 256 else '' for c in t)
+
+    def _md_to_plain(text: str) -> str:
+        """
+        Convert markdown content to clean plain text that reads well in a PDF.
+        Preserves headings (as ALLCAPS), bullet points, tables (grid), and separators.
+        """
+        lines_out = []
+        in_table  = False
+        table_buf = []
+
+        def _flush_table(buf: list):
+            """Convert collected | pipe | rows into aligned text columns."""
+            rows = []
+            for row in buf:
+                cells = [c.strip() for c in row.strip('|').split('|')]
+                rows.append(cells)
+            # filter out separator rows (---)
+            rows = [r for r in rows if not all(set(c) <= {'-', ' '} for c in r)]
+            if not rows:
+                return []
+            col_w = [max(len(r[i]) if i < len(r) else 0 for r in rows)
+                     for i in range(max(len(r) for r in rows))]
+            out = []
+            for ri, row in enumerate(rows):
+                line = '  '.join(
+                    (row[i] if i < len(row) else '').ljust(col_w[i])
+                    for i in range(len(col_w))
+                )
+                out.append(line.rstrip())
+                if ri == 0:
+                    out.append('-' * min(sum(col_w) + 2 * len(col_w), 90))
+            return out
+
+        for raw_line in text.split('\n'):
+            line = raw_line.rstrip()
+
+            # Table rows
+            if line.startswith('|'):
+                in_table = True
+                table_buf.append(line)
+                continue
+            elif in_table:
+                lines_out.extend(_flush_table(table_buf))
+                table_buf = []
+                in_table = False
+
+            stripped = line.strip()
+
+            if not stripped:
+                lines_out.append('')
+                continue
+
+            # Headings
+            if stripped.startswith('### '):
+                lines_out.append(stripped[4:].upper())
+            elif stripped.startswith('## '):
+                lines_out.append(stripped[3:].upper())
+            elif stripped.startswith('# '):
+                lines_out.append(stripped[2:].upper())
+            # Horizontal rule
+            elif _re.match(r'^-{3,}$', stripped):
+                lines_out.append('-' * 60)
+            # Bullet points
+            elif stripped.startswith(('- ', '* ')):
+                bullet_text = stripped[2:]
+                bullet_text = _re.sub(r'\*\*(.+?)\*\*', r'\1', bullet_text)
+                bullet_text = _re.sub(r'\*(.+?)\*',   r'\1', bullet_text)
+                bullet_text = _re.sub(r'`(.+?)`',     r'\1', bullet_text)
+                lines_out.append(f'  • {bullet_text}')
+            # Numbered list
+            elif _re.match(r'^\d+\.\s', stripped):
+                item = _re.sub(r'^\d+\.\s+', '', stripped)
+                item = _re.sub(r'\*\*(.+?)\*\*', r'\1', item)
+                lines_out.append(f'  {item}')
+            # Normal text — strip inline markdown
+            else:
+                cleaned = _re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+                cleaned = _re.sub(r'\*(.+?)\*',   r'\1', cleaned)
+                cleaned = _re.sub(r'`(.+?)`',     r'\1', cleaned)
+                cleaned = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', cleaned)
+                lines_out.append(cleaned)
+
+        if in_table and table_buf:
+            lines_out.extend(_flush_table(table_buf))
+
+        # Collapse 3+ blank lines to 1
+        result, prev_blank = [], False
+        for ln in lines_out:
+            if ln == '':
+                if not prev_blank:
+                    result.append('')
+                prev_blank = True
+            else:
+                result.append(ln)
+                prev_blank = False
+
+        return '\n'.join(result).strip()
+
+    # ── Build PDF ─────────────────────────────────────────────────────────────
+    class ChatPDF(FPDF):
+        def header(self):
+            pass  # custom header below
+
+    pdf = ChatPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.add_page()
+
+    L  = pdf.l_margin   # left margin
+    PW = pdf.w - L - pdf.r_margin  # printable width
+
+    # ── Title block ───────────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.set_text_color(31, 35, 40)
+    pdf.cell(0, 9, "GitHub Documentation Assistant", ln=True)
+
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(101, 109, 118)
+    pdf.cell(0, 5,
+        f"Session: {session_id}   |   "
+        f"Exported: {_dt.now().strftime('%Y-%m-%d %H:%M')}   |   "
+        f"{len(messages)} messages",
+        ln=True,
+    )
+    pdf.ln(2)
+    pdf.set_draw_color(208, 215, 222)
+    pdf.set_line_width(0.4)
+    pdf.line(L, pdf.get_y(), L + PW, pdf.get_y())
+    pdf.ln(5)
+
+    # ── Messages ──────────────────────────────────────────────────────────────
+    for msg in messages:
+        role    = msg["role"]
+        intent  = msg.get("intent") or ""
+        content = msg.get("content") or ""
+
+        plain = _strip_emoji(_md_to_plain(content))
+
+        if role == "user":
+            # ── User bubble ───────────────────────────────────────────────────
+            pdf.set_fill_color(221, 244, 255)
+            pdf.set_draw_color(182, 227, 255)
+            pdf.set_text_color(9, 105, 218)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_line_width(0.3)
+            pdf.cell(0, 6, "  YOU", ln=True, fill=True, border=1)
+
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(31, 35, 40)
+            pdf.set_fill_color(240, 248, 255)
+            pdf.set_draw_color(182, 227, 255)
+            pdf.multi_cell(0, 5.5, plain, fill=True, border="LRB")
+
+        else:
+            # ── Assistant header with intent label ────────────────────────────
+            r, g, b = INTENT_RGB.get(intent, (101, 109, 118))
+            label   = INTENT_LABELS.get(intent, intent.replace("_", " ").title() if intent else "")
+
+            pdf.set_fill_color(246, 248, 250)
+            pdf.set_draw_color(208, 215, 222)
+            pdf.set_text_color(101, 109, 118)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_line_width(0.3)
+
+            header_str = "  ASSISTANT"
+            if label:
+                header_str += f"   [{label}]"
+            pdf.cell(0, 6, header_str, ln=True, fill=True, border=1)
+
+            # Left-accent body block
+            y_start = pdf.get_y()
+            pdf.set_left_margin(L + 4)
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(31, 35, 40)
+            pdf.multi_cell(PW - 4, 5.5, plain, border=0)
+            pdf.set_left_margin(L)
+            y_end = pdf.get_y()
+
+            # Draw colored left accent line
+            pdf.set_draw_color(r, g, b)
+            pdf.set_line_width(1.2)
+            pdf.line(L, y_start, L, y_end)
+            pdf.set_line_width(0.3)
+
+        pdf.ln(3)
+        pdf.set_draw_color(230, 232, 235)
+        pdf.line(L, pdf.get_y(), L + PW, pdf.get_y())
+        pdf.ln(4)
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    pdf.set_y(-18)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(145, 152, 161)
+    pdf.cell(0, 5, "Generated by GitHub Docs Assistant", align="C", ln=True)
+
+    return bytes(pdf.output())
 
 
 # ── New-content diff helper ───────────────────────────────────────────────────
@@ -386,251 +614,571 @@ def _get_new_sentences(prev_text: str, new_text: str) -> list:
     return new_only
 
 
-# ── GitHub design-system CSS ───────────────────────────────────────────────────
+# ── Apple design-system CSS ────────────────────────────────────────────────────
 GITHUB_CSS = """
 <style>
-/* ── Fonts & global reset ─────────────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS  (Apple.com aesthetic — 8-px grid, SF Pro)
+   ─────────────────────────────────────────────────────────────────────────
+   background  #FAFAFA   surface     #FFFFFF   border      #E5E5EA
+   accent      #0071E3   accentHover #0077ED
+   textPrimary #1D1D1F   textSec     #6E6E73   textMuted   #AEAEB2
+   success     #34C759   warning     #FF9500   danger      #FF3B30
+   ═══════════════════════════════════════════════════════════════════════ */
 
+/* ── Global reset & fonts ─────────────────────────────────────────────── */
 html, body, [class*="css"] {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
-                 Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-    font-size: 15px;
-    color: #1F2328;
-    background-color: #FFFFFF;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.6 !important;
+    color: #1D1D1F !important;
+    background-color: #FAFAFA !important;
+    -webkit-font-smoothing: antialiased !important;
 }
 
-/* Prevent layout from zooming with browser zoom */
-.block-container { zoom: 1 !important; }
-
-/* ── Hide default Streamlit chrome ───────────────────────────────────────── */
-#MainMenu, footer, header { visibility: hidden; }
-.stDeployButton { display: none; }
-.block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 100%; }
-
-/* ── Page header (## heading) ─────────────────────────────────────────────── */
-h2 {
-    font-size: 20px !important;
-    font-weight: 700 !important;
-    color: #1F2328 !important;
-    padding-bottom: 12px !important;
-    border-bottom: 1px solid #D0D7DE !important;
-    margin-bottom: 16px !important;
+/* Text selection */
+::selection {
+    background: rgba(0, 113, 227, 0.20) !important;
+    color: #0071E3 !important;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────────────────────── */
-[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
-    background: #F6F8FA;
+/* ── Hide Streamlit chrome ────────────────────────────────────────────── */
+#MainMenu, footer, header { visibility: hidden !important; display: none !important; }
+.stDeployButton { display: none !important; }
+
+/* ── App shell ────────────────────────────────────────────────────────── */
+.stApp { background-color: #FAFAFA !important; }
+.block-container {
+    padding-top: 24px !important;
+    padding-bottom: 32px !important;
+    max-width: 100% !important;
 }
 
-/* Sidebar section headers (#### headings) */
+/* Remove stray Streamlit box-shadows and borders on containers */
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+[data-testid="column"] {
+    box-shadow: none !important;
+}
+
+/* ── Custom scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #E5E5EA; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #AEAEB2; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #6E6E73; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LEFT SIDEBAR
+   ═══════════════════════════════════════════════════════════════════════ */
+[data-testid="stSidebar"] {
+    background: #FFFFFF !important;
+    border-right: 1px solid #E5E5EA !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    background: #FFFFFF !important;
+}
+
+/* Sidebar nav items (buttons rendered inside sidebar) */
+[data-testid="stSidebar"] .stButton > button {
+    font-size: 13px !important;
+    color: #1D1D1F !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 6px 12px !important;
+    text-align: left !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    transition: background 0.12s !important;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: #F2F2F7 !important;
+    color: #1D1D1F !important;
+    border: none !important;
+}
+
+[data-testid="stSidebar"] .stButton > button:focus {
+    background: #F2F2F7 !important;
+    color: #0071E3 !important;
+    font-weight: 500 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RIGHT SIDEBAR  (col_side — a normal st.column, not stSidebar)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Section header labels (h4 used as section headers in sidebar) */
 h4 {
     font-size: 11px !important;
     font-weight: 600 !important;
     text-transform: uppercase !important;
-    letter-spacing: 0.8px !important;
-    color: #9198A1 !important;
-    margin-top: 16px !important;
+    letter-spacing: 0.06em !important;
+    color: #6E6E73 !important;
+    margin-top: 20px !important;
     margin-bottom: 8px !important;
-}
-
-/* ── Chat messages ────────────────────────────────────────────────────────── */
-@keyframes msgFadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-[data-testid="stChatMessage"] {
-    animation: msgFadeIn 0.15s ease-out;
+    padding: 0 !important;
     border: none !important;
-    background: transparent !important;
-    padding: 6px 0 !important;
 }
 
-/* User bubble — right-aligned blue pill */
-[data-testid="stChatMessage"][data-testid*="user"],
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    flex-direction: row-reverse !important;
-}
-
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) .stMarkdown p {
-    background: #DDF4FF !important;
-    color: #0969DA !important;
-    border: 1px solid #B6E3FF !important;
-    border-radius: 12px 12px 2px 12px !important;
-    padding: 10px 14px !important;
-    display: inline-block !important;
-    max-width: 88% !important;
-}
-
-/* Assistant bubble — left border accent */
-[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    border-left: 3px solid #0969DA !important;
-    padding-left: 12px !important;
-    background: transparent !important;
-}
-
-/* ── Chat input ───────────────────────────────────────────────────────────── */
-[data-testid="stChatInput"] textarea {
-    border: 1px solid #D0D7DE !important;
-    border-radius: 6px !important;
-    background: #FFFFFF !important;
-    font-size: 14px !important;
-    padding: 10px 14px !important;
-    transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-[data-testid="stChatInput"] textarea:focus {
-    border-color: #0969DA !important;
-    box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15) !important;
-    outline: none !important;
-}
-
-/* ── Buttons ──────────────────────────────────────────────────────────────── */
-/* Default / outlined buttons */
-.stButton > button {
-    background: #FFFFFF !important;
-    color: #1F2328 !important;
-    border: 1px solid #D0D7DE !important;
-    border-radius: 6px !important;
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    padding: 5px 12px !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    transition: background 0.12s, border-color 0.12s;
-}
-
-.stButton > button:hover {
-    background: #F3F4F6 !important;
-    border-color: #9198A1 !important;
-}
-
-/* Primary button (New Conversation) */
-.stButton > button[kind="primary"] {
-    background: #0969DA !important;
-    color: #FFFFFF !important;
-    border-color: #0969DA !important;
-    font-weight: 600 !important;
-}
-
-.stButton > button[kind="primary"]:hover {
-    background: #0550AE !important;
-    border-color: #0550AE !important;
-}
-
-/* Close-ticket danger buttons inside expanders */
-div[data-testid="stExpander"] .stButton > button {
-    background: #FFEBE9 !important;
-    color: #CF222E !important;
-    border-color: #FFBCB5 !important;
-    font-size: 12px !important;
-    padding: 3px 10px !important;
-}
-
-div[data-testid="stExpander"] .stButton > button:hover {
-    background: #CF222E !important;
-    color: #FFFFFF !important;
-    border-color: #CF222E !important;
-}
-
-/* Follow-up suggestion buttons — inside chat messages */
-[data-testid="stChatMessage"] .stButton > button {
-    background: transparent !important;
-    color: #0969DA !important;
-    border: 1px solid #B6E3FF !important;
-    border-radius: 20px !important;
-    font-size: 12px !important;
-    font-weight: 500 !important;
-    padding: 4px 12px !important;
-    margin: 2px 0 !important;
-}
-
-[data-testid="stChatMessage"] .stButton > button:hover {
-    background: #DDF4FF !important;
-    border-color: #0969DA !important;
-}
-
-/* Example query buttons in sidebar */
-.stButton > button[data-testid*="ex_"] {
-    text-align: left !important;
-    font-size: 12px !important;
-    color: #0969DA !important;
-    border-color: #B6E3FF !important;
-    background: #F6F8FA !important;
-}
-
-/* ── Ticket expander cards ─────────────────────────────────────────────────── */
+/* Ticket expander cards */
 [data-testid="stExpander"] {
-    border: 1px solid #D0D7DE !important;
-    border-radius: 6px !important;
     background: #FFFFFF !important;
+    border: 1px solid #E5E5EA !important;
+    border-radius: 10px !important;
     margin-bottom: 8px !important;
+    box-shadow: none !important;
+    overflow: hidden !important;
 }
 
 [data-testid="stExpander"] summary {
     font-size: 13px !important;
     font-weight: 600 !important;
-    color: #1F2328 !important;
-    padding: 8px 12px !important;
+    color: #1D1D1F !important;
+    padding: 12px 14px !important;
+    background: #FFFFFF !important;
 }
 
-/* ── Progress bar (confidence meter) ─────────────────────────────────────── */
-[data-testid="stProgress"] > div > div {
-    background: #0969DA !important;
-    border-radius: 4px !important;
+[data-testid="stExpander"] summary:hover {
+    background: #F9F9F9 !important;
 }
 
-[data-testid="stProgress"] {
-    background: #F3F4F6 !important;
-    border-radius: 4px !important;
+/* Ticket priority left borders via data attribute on the expander container.
+   We use class selectors on paragraphs inside since Streamlit doesn't expose
+   priority as a data attribute. Target the first bold text color via :has. */
+[data-testid="stExpander"]:has(p:contains("High")) {
+    border-left: 3px solid #FF3B30 !important;
+}
+[data-testid="stExpander"]:has(p:contains("Medium")) {
+    border-left: 3px solid #FF9500 !important;
+}
+[data-testid="stExpander"]:has(p:contains("Low")) {
+    border-left: 3px solid #34C759 !important;
 }
 
-/* ── Horizontal rules ─────────────────────────────────────────────────────── */
-hr {
-    border: none !important;
-    border-top: 1px solid #D0D7DE !important;
-    margin: 12px 0 !important;
-}
-
-/* ── Caption / muted text ─────────────────────────────────────────────────── */
-.stCaption, small {
-    color: #9198A1 !important;
+/* Ticket content typography */
+[data-testid="stExpander"] [data-testid="stMarkdown"] code {
+    font-family: "SF Mono", "Fira Code", monospace !important;
     font-size: 12px !important;
+    color: #0071E3 !important;
+    background: #F2F2F7 !important;
+    padding: 2px 5px !important;
+    border-radius: 4px !important;
 }
 
-/* ── Markdown tables (ticket confirmation) ────────────────────────────────── */
-table {
+/* Close-ticket danger buttons inside expanders */
+[data-testid="stExpander"] .stButton > button {
+    background: transparent !important;
+    color: #FF3B30 !important;
+    border: 1px solid #E5E5EA !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    padding: 3px 10px !important;
+    transition: all 0.12s !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stExpander"] .stButton > button:hover {
+    background: #FF3B30 !important;
+    color: #FFFFFF !important;
+    border-color: #FF3B30 !important;
+}
+
+/* Conversation list rows */
+[data-testid="stVerticalBlock"] hr {
+    border: none !important;
+    border-bottom: 1px solid #F2F2F7 !important;
+    margin: 0 !important;
+}
+
+/* Session ID chips (rendered as inline code in conversation list) */
+[data-testid="stMarkdown"] code {
+    font-family: "SF Mono", "Fira Code", monospace !important;
+    font-size: 11px !important;
+    background: #F2F2F7 !important;
+    color: #0071E3 !important;
+    border-radius: 4px !important;
+    padding: 2px 6px !important;
+    border: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   CHAT AREA
+   ═══════════════════════════════════════════════════════════════════════ */
+@keyframes msgFadeIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+[data-testid="stChatMessage"] {
+    animation: msgFadeIn 0.14s ease-out !important;
+    border: none !important;
+    background: transparent !important;
+    padding: 6px 0 !important;
+    box-shadow: none !important;
+}
+
+/* User message bubble */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    flex-direction: row-reverse !important;
+}
+
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) .stMarkdown p {
+    background: #EBF5FF !important;
+    border: 1px solid #B6D9FF !important;
+    border-radius: 12px 12px 2px 12px !important;
+    padding: 10px 14px !important;
+    display: inline-block !important;
+    max-width: 70% !important;
+    margin-left: auto !important;
+    font-size: 14px !important;
+    color: #1D1D1F !important;
+    line-height: 1.6 !important;
+}
+
+/* Assistant message — left blue accent bar */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    border-left: 3px solid #0071E3 !important;
+    padding-left: 14px !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+}
+
+/* Avatar circles */
+[data-testid="chatAvatarIcon-user"],
+[data-testid="chatAvatarIcon-assistant"] {
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 50% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    flex-shrink: 0 !important;
+}
+
+[data-testid="chatAvatarIcon-user"] {
+    background: #0071E3 !important;
+    color: #FFFFFF !important;
+}
+
+[data-testid="chatAvatarIcon-assistant"] {
+    background: #F2F2F7 !important;
+    color: #0071E3 !important;
+}
+
+/* ── Chat input bar ────────────────────────────────────────────────────── */
+[data-testid="stChatInput"] {
+    border-radius: 10px !important;
+}
+
+[data-testid="stChatInput"] textarea {
+    background: #FFFFFF !important;
+    border: 1px solid #E5E5EA !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    font-size: 14px !important;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif !important;
+    color: #1D1D1F !important;
+    box-shadow: none !important;
+    transition: border-color 0.15s, box-shadow 0.15s !important;
+}
+
+[data-testid="stChatInput"] textarea::placeholder {
+    color: #AEAEB2 !important;
+}
+
+[data-testid="stChatInput"] textarea:focus {
+    border-color: #0071E3 !important;
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12) !important;
+    outline: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   BUTTONS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Default / outlined buttons (example queries, action buttons) */
+.stButton > button {
+    background: #FFFFFF !important;
+    color: #1D1D1F !important;
+    border: 1px solid #E5E5EA !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif !important;
+    font-weight: 400 !important;
+    padding: 6px 14px !important;
+    box-shadow: none !important;
+    transition: border-color 0.12s, color 0.12s !important;
+}
+
+.stButton > button:hover {
+    border-color: #0071E3 !important;
+    color: #0071E3 !important;
+    background: #FFFFFF !important;
+    box-shadow: none !important;
+}
+
+/* Primary buttons (New Conversation, Analytics Dashboard) */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid*="new_conv"],
+.stButton > button[data-testid*="analytics"] {
+    background: #0071E3 !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    padding: 6px 14px !important;
+    box-shadow: none !important;
+    transition: background 0.12s, transform 0.12s !important;
+}
+
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid*="new_conv"]:hover,
+.stButton > button[data-testid*="analytics"]:hover {
+    background: #0077ED !important;
+    transform: translateY(-1px) !important;
+    box-shadow: none !important;
+}
+
+/* Follow-up suggestion chips (inside chat messages) */
+[data-testid="stChatMessage"] .stButton > button {
+    background: #FFFFFF !important;
+    color: #0071E3 !important;
+    border: 1px solid #B6D9FF !important;
+    border-radius: 20px !important;
+    font-size: 12px !important;
+    font-weight: 400 !important;
+    padding: 4px 12px !important;
+    margin: 2px 0 !important;
+    box-shadow: none !important;
+    transition: background 0.12s, border-color 0.12s !important;
+}
+
+[data-testid="stChatMessage"] .stButton > button:hover {
+    background: #EBF5FF !important;
+    border-color: #0071E3 !important;
+    color: #0071E3 !important;
+    transform: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TYPOGRAPHY & MARKDOWN
+   ═══════════════════════════════════════════════════════════════════════ */
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+    font-weight: 600 !important;
+    color: #1D1D1F !important;
+    margin-top: 8px !important;
+    margin-bottom: 4px !important;
+    line-height: 1.3 !important;
+}
+
+.stMarkdown h1 { font-size: 22px !important; }
+.stMarkdown h2 { font-size: 18px !important; border: none !important; padding: 0 !important; }
+.stMarkdown h3 { font-size: 15px !important; }
+
+.stMarkdown p {
+    font-size: 14px !important;
+    line-height: 1.6 !important;
+    color: #1D1D1F !important;
+    margin-bottom: 8px !important;
+}
+
+.stMarkdown a {
+    color: #0071E3 !important;
+    text-decoration: none !important;
+}
+
+.stMarkdown a:hover { text-decoration: underline !important; }
+
+.stMarkdown ul li, .stMarkdown ol li {
+    line-height: 1.6 !important;
+    margin-bottom: 4px !important;
+    font-size: 14px !important;
+    color: #1D1D1F !important;
+}
+
+/* Inline code */
+.stMarkdown code, code {
+    font-family: "SF Mono", "Fira Code", monospace !important;
+    font-size: 12px !important;
+    background: #F2F2F7 !important;
+    color: #1D1D1F !important;
+    padding: 2px 5px !important;
+    border-radius: 4px !important;
+    border: none !important;
+}
+
+/* Code blocks */
+.stMarkdown pre {
+    background: #F2F2F7 !important;
+    border-radius: 8px !important;
+    padding: 14px 16px !important;
+    border: 1px solid #E5E5EA !important;
+    overflow-x: auto !important;
+}
+
+.stMarkdown pre code {
+    background: transparent !important;
+    padding: 0 !important;
+    font-size: 12px !important;
+    color: #1D1D1F !important;
+}
+
+/* Captions & secondary text */
+.stCaption, small, .stMarkdown small {
+    font-size: 11px !important;
+    color: #AEAEB2 !important;
+    line-height: 1.5 !important;
+}
+
+/* ── Markdown tables ────────────────────────────────────────────────────── */
+.stMarkdown table, table {
     border-collapse: collapse !important;
     width: 100% !important;
     font-size: 13px !important;
+    margin-bottom: 12px !important;
 }
 
-th {
-    background: #F6F8FA !important;
-    color: #656D76 !important;
+.stMarkdown th, th {
+    background: #F2F2F7 !important;
+    color: #1D1D1F !important;
     font-weight: 600 !important;
+    font-size: 13px !important;
+    text-align: left !important;
+    padding: 8px 12px !important;
+    border-bottom: 2px solid #E5E5EA !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+}
+
+.stMarkdown td, td {
+    padding: 8px 12px !important;
+    border-bottom: 1px solid #F2F2F7 !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    color: #1D1D1F !important;
+    vertical-align: top !important;
+}
+
+.stMarkdown tr:last-child td, tr:last-child td {
+    border-bottom: none !important;
+}
+
+/* ── Horizontal rules ───────────────────────────────────────────────────── */
+hr {
+    border: none !important;
+    border-top: 1px solid #E5E5EA !important;
+    margin: 12px 0 !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PROGRESS BAR
+   ═══════════════════════════════════════════════════════════════════════ */
+[data-testid="stProgress"] {
+    background: #F2F2F7 !important;
+    border-radius: 4px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stProgress"] > div > div {
+    background: #0071E3 !important;
+    border-radius: 4px !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SOURCES SECTION  (rendered as stMarkdown below chat messages)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* "Sources" label — matched via h6 used in source rendering */
+.stMarkdown h6 {
     font-size: 11px !important;
+    font-weight: 600 !important;
     text-transform: uppercase !important;
-    letter-spacing: 0.5px !important;
-    padding: 6px 12px !important;
-    border: 1px solid #D0D7DE !important;
+    letter-spacing: 0.06em !important;
+    color: #AEAEB2 !important;
+    margin: 12px 0 8px !important;
+    border: none !important;
+    padding: 0 !important;
 }
 
-td {
-    padding: 6px 12px !important;
-    border: 1px solid #D0D7DE !important;
-    color: #1F2328 !important;
+/* Source link chips */
+.stMarkdown h6 + p a, .stMarkdown h6 ~ p a {
+    color: #0071E3 !important;
+    font-size: 13px !important;
+    text-decoration: none !important;
 }
 
-tr:nth-child(even) td { background: #F6F8FA !important; }
+.stMarkdown h6 + p a:hover, .stMarkdown h6 ~ p a:hover {
+    text-decoration: underline !important;
+}
 
-/* ── Scrollbar ────────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #F6F8FA; }
-::-webkit-scrollbar-thumb { background: #D0D7DE; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #9198A1; }
+/* ═══════════════════════════════════════════════════════════════════════
+   INTENT BADGE SPANS  (injected via st.html / intent_badge())
+   — These are raw HTML spans so Streamlit doesn't interfere.
+   Styles here reinforce the inline style with cascade specificity.
+   ═══════════════════════════════════════════════════════════════════════ */
+span[style*="border-radius"] {
+    border-radius: 20px !important;
+    padding: 3px 10px !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em !important;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif !important;
+    display: inline-block !important;
+    margin-bottom: 4px !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MISCELLANEOUS STREAMLIT WIDGETS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Remove stray input/select widget borders */
+.stTextInput > div > div > input,
+.stSelectbox > div > div {
+    border: 1px solid #E5E5EA !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    color: #1D1D1F !important;
+    box-shadow: none !important;
+}
+
+.stTextInput > div > div > input:focus,
+.stSelectbox > div > div:focus-within {
+    border-color: #0071E3 !important;
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12) !important;
+}
+
+/* Spinner text */
+.stSpinner p {
+    font-size: 13px !important;
+    color: #6E6E73 !important;
+}
+
+/* Alert / info / warning / error boxes */
+[data-testid="stAlert"] {
+    border-radius: 8px !important;
+    border: none !important;
+    font-size: 13px !important;
+    padding: 10px 14px !important;
+}
+
+/* Columns — no extra padding bleed */
+[data-testid="column"] {
+    padding: 0 8px !important;
+}
+
+[data-testid="column"]:first-child { padding-left: 0 !important; }
+[data-testid="column"]:last-child  { padding-right: 0 !important; }
 </style>
 """
 
@@ -758,14 +1306,14 @@ def main():
         with _hcol_export:
             st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
             if st.session_state.get("messages"):
-                _html_export = _generate_html_export(st.session_state.messages, session_id)
+                _pdf_bytes = _generate_pdf(st.session_state.messages, session_id)
                 st.download_button(
                     "📄",
-                    data=_html_export.encode("utf-8"),
-                    file_name=f"conversation_{session_id}.html",
-                    mime="text/html",
+                    data=_pdf_bytes,
+                    file_name=f"conversation_{session_id}.pdf",
+                    mime="application/pdf",
                     key="export_download",
-                    help="Export conversation as HTML (print to PDF from browser)",
+                    help="Download conversation as PDF",
                 )
 
         # ── Replay mode — renders instead of normal chat when active ──────
@@ -1199,10 +1747,17 @@ def main():
                 _NON_RAG_INTENTS = {
                     "create_ticket", "check_ticket", "check_billing",
                     "close_tickets", "close_ticket_by_id",
+                    "register_user", "upgrade_plan", "list_accounts",
                     "out_of_scope", "prompt_injection",
                 }
 
-                if not is_ticket_flow_active(session_id):
+                # Skip streaming entirely when any multi-turn flow is active —
+                # those messages must always reach process_message() directly.
+                _any_flow_active = (
+                    is_ticket_flow_active(session_id)
+                    or is_register_flow_active(session_id)
+                )
+                if not _any_flow_active:
                     _intent_result = intent_router.classify(user_input)
                     _guardrail     = get_guardrail_response(_intent_result, prompts)
                     if not _guardrail and _intent_result.intent not in _NON_RAG_INTENTS:

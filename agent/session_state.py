@@ -38,7 +38,7 @@ class SessionState:
         return conn
 
     def _init_db(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist, then seed users on first run."""
         with self._get_conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS tickets (
@@ -68,7 +68,31 @@ class SessionState:
                     question   TEXT    NOT NULL DEFAULT '',
                     is_gap     INTEGER NOT NULL DEFAULT 0
                 );
+
+                CREATE TABLE IF NOT EXISTS users (
+                    username        TEXT PRIMARY KEY,
+                    plan            TEXT    NOT NULL DEFAULT 'Free',
+                    price           TEXT    NOT NULL DEFAULT '$0/month',
+                    seats           INTEGER NOT NULL DEFAULT 1,
+                    storage_gb      REAL    NOT NULL DEFAULT 0.5,
+                    actions_minutes INTEGER NOT NULL DEFAULT 2000,
+                    joined_date     TEXT    NOT NULL
+                );
             """)
+
+            # Seed the four original accounts on first run (INSERT OR IGNORE = idempotent)
+            seed_users = [
+                ("alice", "Pro",        "$4/month",   1,   2.0,  3000,  "2023-01-15"),
+                ("bob",   "Team",       "$4/user/mo", 5,   2.0,  50000, "2022-06-10"),
+                ("carol", "Enterprise", "Custom",     100, 50.0, 50000, "2021-03-01"),
+                ("dave",  "Free",       "$0/month",   1,   0.5,  2000,  "2024-07-20"),
+            ]
+            conn.executemany(
+                """INSERT OR IGNORE INTO users
+                   (username, plan, price, seats, storage_gb, actions_minutes, joined_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                seed_users,
+            )
         logger.debug("Database tables initialised")
 
     # ── Ticket methods ─────────────────────────────────────────────────────
@@ -333,3 +357,89 @@ class SessionState:
                 "SELECT * FROM tickets WHERE status='Open' ORDER BY created_at DESC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # ── User / billing methods ─────────────────────────────────────────────────
+
+    # Plan pricing lookup (single source of truth)
+    PLAN_PRICING = {
+        "Free":       {"price": "$0/month",   "seats": 1,   "storage_gb": 0.5,  "actions_minutes": 2000},
+        "Pro":        {"price": "$4/month",   "seats": 1,   "storage_gb": 2.0,  "actions_minutes": 3000},
+        "Team":       {"price": "$4/user/mo", "seats": 5,   "storage_gb": 2.0,  "actions_minutes": 50000},
+        "Enterprise": {"price": "Custom",     "seats": 100, "storage_gb": 50.0, "actions_minutes": 50000},
+    }
+
+    def get_user(self, username: str) -> Optional[dict]:
+        """Look up a user by username. Returns None if not found."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?", (username.lower(),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> List[dict]:
+        """Return all registered users ordered by username."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY username ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_user(self, username: str, plan: str) -> dict:
+        """
+        Register a new user. Returns the created user dict.
+        Raises ValueError if username already exists.
+        """
+        username = username.lower().strip()
+        if self.get_user(username):
+            raise ValueError(f"Username '{username}' already exists.")
+
+        defaults = self.PLAN_PRICING.get(plan, self.PLAN_PRICING["Free"])
+        joined   = datetime.utcnow().strftime("%Y-%m-%d")
+
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT INTO users
+                   (username, plan, price, seats, storage_gb, actions_minutes, joined_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    username,
+                    plan,
+                    defaults["price"],
+                    defaults["seats"],
+                    defaults["storage_gb"],
+                    defaults["actions_minutes"],
+                    joined,
+                ),
+            )
+        logger.info(f"User registered: {username} | plan={plan}")
+        return self.get_user(username)
+
+    def update_user_plan(self, username: str, new_plan: str) -> dict:
+        """
+        Upgrade or downgrade a user's plan. Returns updated user dict.
+        Raises ValueError if user not found or plan invalid.
+        """
+        username = username.lower().strip()
+        user = self.get_user(username)
+        if not user:
+            raise ValueError(f"User '{username}' not found.")
+        if new_plan not in self.PLAN_PRICING:
+            raise ValueError(f"Invalid plan '{new_plan}'. Choose: Free, Pro, Team, Enterprise.")
+
+        defaults = self.PLAN_PRICING[new_plan]
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE users SET
+                       plan=?, price=?, seats=?, storage_gb=?, actions_minutes=?
+                   WHERE username=?""",
+                (
+                    new_plan,
+                    defaults["price"],
+                    defaults["seats"],
+                    defaults["storage_gb"],
+                    defaults["actions_minutes"],
+                    username,
+                ),
+            )
+        logger.info(f"Plan updated: {username} -> {new_plan}")
+        return self.get_user(username)

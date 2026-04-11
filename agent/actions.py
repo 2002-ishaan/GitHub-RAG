@@ -1,19 +1,13 @@
 """
 agent/actions.py
 ────────────────────────────────────────────────────────────────
-All 3 mock actions for the GitHub Documentation Assistant.
+Actions for the GitHub Documentation Assistant.
 
-ACTION 1 — create_ticket (MULTI-TURN)
-    Collects: category → description → priority
-    Saves to SQLite, returns ticket ID
-
-ACTION 2 — check_ticket (SINGLE-TURN)
-    Input: ticket_id (e.g. TKT-001)
-    Reads from SQLite, returns full ticket details
-
-ACTION 3 — check_billing (SINGLE-TURN)
-    Input: username (mock)
-    Reads from mock JSON database, returns plan details
+ACTION 1 — create_ticket    (MULTI-TURN)
+ACTION 2 — check_ticket     (SINGLE-TURN)
+ACTION 3 — check_billing    (SINGLE-TURN) — reads from SQLite users table
+ACTION 4 — register_user    (MULTI-TURN)  — collects username + plan, saves to SQLite
+ACTION 5 — upgrade_plan     (SINGLE-TURN) — updates existing user's plan in SQLite
 ────────────────────────────────────────────────────────────────
 """
 
@@ -23,16 +17,6 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 from loguru import logger
-
-# ── Mock billing database ──────────────────────────────────────────────────────
-
-MOCK_ACCOUNTS = {
-    "alice":   {"plan": "Pro",        "price": "$4/month",  "seats": 1,   "actions_minutes": 3000,  "storage_gb": 2},
-    "bob":     {"plan": "Team",       "price": "$4/user/mo","seats": 5,   "actions_minutes": 50000, "storage_gb": 2},
-    "carol":   {"plan": "Enterprise", "price": "Custom",    "seats": 100, "actions_minutes": 50000, "storage_gb": 50},
-    "dave":    {"plan": "Free",       "price": "$0/month",  "seats": 1,   "actions_minutes": 2000,  "storage_gb": 0.5},
-    "default": {"plan": "Free",       "price": "$0/month",  "seats": 1,   "actions_minutes": 2000,  "storage_gb": 0.5},
-}
 
 VALID_CATEGORIES = {
     "1": "Account & Authentication",
@@ -382,51 +366,64 @@ def handle_check_ticket(user_message: str, session_state, rag_chain=None) -> str
 
 # ── Action 3: Check Billing Plan (Single-turn) ─────────────────────────────────
 
-def handle_check_billing(user_message: str) -> str:
+def handle_check_billing(user_message: str, session_state) -> str:
     """
-    Look up a mock account's billing plan.
+    Look up an account's billing plan from SQLite.
     Tries to extract a username from the message.
     """
-    # Try to extract username from message
+    # Try to extract username from message.
     # Patterns: "check alice's plan", "what plan is bob on", "billing for carol"
-    username = None
+    # We track any candidate name we tried so we can give a "not found" error.
+    SKIP_BILLING_WORDS = {
+        "check", "view", "see", "billing", "plan", "subscription",
+        "what", "is", "for", "my", "the", "on", "using", "account",
+        "github", "show", "get", "details",
+    }
+    username      = None
+    candidate_name = None   # the word we tried that wasn't in DB
 
     for word in user_message.lower().split():
         clean = re.sub(r"[^a-z0-9]", "", word)
-        if clean in MOCK_ACCOUNTS and clean != "default":
+        if not clean or len(clean) < 2 or clean in SKIP_BILLING_WORDS:
+            continue
+        candidate_name = clean
+        user = session_state.get_user(clean)
+        if user:
             username = clean
             break
 
     if not username:
-        username = "default"
-        note = (
-            "\n\n> *No username found in your message. "
-            "Showing the default Free plan. "
-            "Try: \"Check billing for alice\" to see specific accounts.*"
+        # Build live user list from SQLite (includes newly registered users)
+        all_users = ", ".join(u["username"] for u in session_state.list_users()) or "none yet"
+        if candidate_name:
+            return (
+                f"❌ **User '{candidate_name}' not found.**\n\n"
+                f"No account exists for **{candidate_name}** in the system.\n"
+                f"Registered users: {all_users}.\n\n"
+                f"To create one, say: *\"Register a new account for {candidate_name}\"*"
+            )
+        return (
+            f"Please specify a username. For example:\n"
+            f"*\"Check billing for alice\"*\n\n"
+            f"Registered users: {all_users}."
         )
-    else:
-        note = ""
 
-    account = MOCK_ACCOUNTS[username]
+    account = session_state.get_user(username)
     plan    = account["plan"]
 
-    plan_emoji = {
-        "Free":       "🆓",
-        "Pro":        "⭐",
-        "Team":       "👥",
-        "Enterprise": "🏢",
-    }.get(plan, "📋")
+    plan_emoji = {"Free": "🆓", "Pro": "⭐", "Team": "👥", "Enterprise": "🏢"}.get(plan, "📋")
 
     return (
-        f"## {plan_emoji} GitHub {plan} Plan\n\n"
+        f"## {plan_emoji} GitHub {plan} Plan — {username.title()}\n\n"
         f"| Feature | Value |\n"
         f"|---|---|\n"
+        f"| Username | {username} |\n"
         f"| Plan | **{plan}** |\n"
         f"| Price | {account['price']} |\n"
         f"| Seats | {account['seats']} |\n"
         f"| Actions minutes/month | {account['actions_minutes']:,} |\n"
         f"| Storage | {account['storage_gb']} GB |\n"
-        f"{note}\n\n"
+        f"| Member since | {account['joined_date']} |\n\n"
         f"For more details, visit: https://github.com/pricing"
     )
 
@@ -463,3 +460,294 @@ def handle_close_tickets(user_message: str, session_state) -> str:
         f"✅ **{count} ticket{'s' if count > 1 else ''} closed successfully.**\n\n"
         f"All your tickets have been marked as Closed."
     )
+
+
+# ── Register flow state ────────────────────────────────────────────────────────
+
+@dataclass
+class RegisterState:
+    """Tracks progress of the multi-turn user registration flow."""
+    step:     str           = "awaiting_username"   # awaiting_username → awaiting_plan → review
+    username: Optional[str] = None
+    plan:     Optional[str] = None
+
+
+_active_register_flows: dict[str, RegisterState] = {}
+
+VALID_PLANS = {
+    "free":       "Free",
+    "pro":        "Pro",
+    "team":       "Team",
+    "enterprise": "Enterprise",
+    "1":          "Free",
+    "2":          "Pro",
+    "3":          "Team",
+    "4":          "Enterprise",
+}
+
+
+def is_register_flow_active(session_id: str) -> bool:
+    return session_id in _active_register_flows
+
+
+def get_register_flow_state(session_id: str) -> Optional[RegisterState]:
+    return _active_register_flows.get(session_id)
+
+
+_REGISTER_SKIP_WORDS = {
+    "register", "add", "create", "sign", "up", "new", "user", "account",
+    "for", "a", "an", "the", "please", "onboard", "me", "my",
+}
+
+
+def _extract_username_from_trigger(message: str) -> Optional[str]:
+    """
+    Try to pull a username out of the intent-trigger message.
+    e.g. "Register a new account for michael" → "michael"
+         "Add user john-doe" → "john-doe"
+    Returns None if no clean candidate found.
+    """
+    # Keep alphanumeric + hyphens only, split on spaces
+    words = re.sub(r"[^a-z0-9\-\s]", "", message.lower()).split()
+    candidates = [w for w in words if w not in _REGISTER_SKIP_WORDS and len(w) >= 2]
+    if candidates:
+        return candidates[-1]   # username usually comes last ("for michael")
+    return None
+
+
+# ── Action 4: Register User (Multi-turn) ──────────────────────────────────────
+
+def handle_register_user(
+    session_id: str,
+    user_message: str,
+    session_state,
+    prompts: dict,
+) -> str:
+    """
+    Multi-turn user registration.
+    Steps: (extract username from trigger OR ask) → ask plan → review → confirm → save.
+    """
+    fresh_start = session_id not in _active_register_flows
+
+    if fresh_start:
+        _active_register_flows[session_id] = RegisterState()
+        state = _active_register_flows[session_id]
+
+        # Try to pull username out of the trigger message
+        # e.g. "Register a new account for michael" → username = "michael"
+        extracted = _extract_username_from_trigger(user_message)
+        if extracted:
+            if session_state.get_user(extracted):
+                del _active_register_flows[session_id]
+                return (
+                    f"❌ Username **{extracted}** is already registered.\n\n"
+                    f"Say *\"Check billing for {extracted}\"* to view their plan, "
+                    f"or *\"Upgrade {extracted} to <plan>\"* to change it."
+                )
+            state.username = extracted
+            state.step     = "awaiting_plan"
+            return prompts["register_prompt"]["collecting_plan"].format(username=extracted)
+        else:
+            # No username in trigger — ask for it
+            state.step = "awaiting_username"
+            return (
+                "What username would you like to register?\n\n"
+                "*(Letters, numbers, and hyphens only — 2 to 39 characters)*"
+            )
+
+    state = _active_register_flows[session_id]
+    msg   = user_message.strip().lower()
+
+    # Escape hatch
+    if msg in CANCEL_WORDS or any(w in msg.split() for w in CANCEL_WORDS):
+        del _active_register_flows[session_id]
+        return (
+            "❌ **Registration cancelled.**\n\n"
+            "Let me know if you'd like to register later."
+        )
+
+    # ── Step 1: collect username (only reached when trigger had no username) ──
+    if state.step == "awaiting_username":
+        raw_username = user_message.strip()
+        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9\-]{0,37}[a-zA-Z0-9]$|^[a-zA-Z0-9]{2}$', raw_username):
+            return (
+                "That doesn't look like a valid GitHub username. "
+                "Usernames can only contain letters, numbers, and hyphens, "
+                "and must be 2–39 characters.\n\nPlease try again:"
+            )
+        if session_state.get_user(raw_username.lower()):
+            return (
+                f"❌ Username **{raw_username}** is already registered.\n\n"
+                f"Try a different username."
+            )
+        state.username = raw_username.lower()
+        state.step     = "awaiting_plan"
+        return prompts["register_prompt"]["collecting_plan"].format(username=state.username)
+
+    # ── Step 2: collect plan ───────────────────────────────────────────────
+    if state.step == "awaiting_plan":
+        plan = VALID_PLANS.get(msg)
+        if not plan:
+            for key, val in VALID_PLANS.items():
+                if key in msg:
+                    plan = val
+                    break
+
+        if not plan:
+            return (
+                "Please choose a plan:\n\n"
+                "1. **Free** — $0/month · 2,000 Actions min · 0.5 GB storage\n"
+                "2. **Pro** — $4/month · 3,000 Actions min · 2 GB storage\n"
+                "3. **Team** — $4/user/mo · 50,000 Actions min · 2 GB storage\n"
+                "4. **Enterprise** — Custom pricing · 50,000 Actions min · 50 GB storage"
+            )
+
+        state.plan = plan
+        state.step = "review"
+
+        defaults = session_state.PLAN_PRICING[plan]
+        return (
+            f"Here's your account summary:\n\n"
+            f"- **Username:** {state.username}\n"
+            f"- **Plan:** {plan} ({defaults['price']})\n"
+            f"- **Storage:** {defaults['storage_gb']} GB\n"
+            f"- **Actions:** {defaults['actions_minutes']:,} min/month\n\n"
+            f"Type **confirm** to register, **edit** to change plan, or **cancel** to exit."
+        )
+
+    # ── Review step ────────────────────────────────────────────────────────
+    if state.step == "review":
+        if msg in CONFIRM_WORDS or any(w in msg.split() for w in CONFIRM_WORDS):
+            try:
+                user = session_state.create_user(state.username, state.plan)
+            except ValueError as e:
+                del _active_register_flows[session_id]
+                return f"❌ {e}"
+
+            del _active_register_flows[session_id]
+            return prompts["register_prompt"]["confirmation"].format(
+                username=user["username"],
+                plan=user["plan"],
+                price=user["price"],
+                actions_minutes=f"{user['actions_minutes']:,}",
+                storage_gb=user["storage_gb"],
+                joined_date=user["joined_date"],
+            )
+
+        elif msg in EDIT_WORDS or any(w in msg.split() for w in EDIT_WORDS):
+            state.step = "awaiting_plan"
+            state.plan = None
+            return (
+                "No problem — which plan would you like?\n\n"
+                "1. **Free**  2. **Pro**  3. **Team**  4. **Enterprise**"
+            )
+
+        else:
+            return (
+                "Please respond with:\n"
+                "- **confirm** to register\n"
+                "- **edit** to choose a different plan\n"
+                "- **cancel** to exit"
+            )
+
+    # Fallback
+    _active_register_flows[session_id] = RegisterState()
+    return prompts["register_prompt"]["collecting_plan"].format(username="your account")
+
+
+# ── Action 5: Upgrade Plan (Single-turn) ──────────────────────────────────────
+
+def handle_upgrade_plan(user_message: str, session_state) -> str:
+    """
+    Parse "upgrade <username> to <plan>" and update the user's plan in SQLite.
+    Returns a before/after comparison card.
+    """
+    msg = user_message.lower()
+
+    # Extract plan from message
+    new_plan = None
+    for key, val in VALID_PLANS.items():
+        if re.search(rf'\b{re.escape(key)}\b', msg):
+            new_plan = val
+            break
+
+    # Extract username — word that isn't a plan keyword or common verb
+    SKIP_WORDS = {
+        "upgrade", "downgrade", "change", "switch", "update", "plan",
+        "to", "from", "for", "the", "my", "their", "a", "an",
+        "free", "pro", "team", "enterprise",
+        "1", "2", "3", "4",
+    }
+    username = None
+    for word in re.sub(r"[^a-z0-9\s]", "", msg).split():
+        if word not in SKIP_WORDS and len(word) >= 2:
+            if session_state.get_user(word):
+                username = word
+                break
+
+    if not username:
+        return (
+            "Please specify a username. For example:\n"
+            "*\"Upgrade alice to Enterprise\"*"
+        )
+
+    if not new_plan:
+        return (
+            "Please specify a plan (Free, Pro, Team, or Enterprise). For example:\n"
+            "*\"Upgrade alice to Enterprise\"*"
+        )
+
+    old_user = session_state.get_user(username)
+    old_plan = old_user["plan"]
+
+    if old_plan == new_plan:
+        return f"ℹ️ **{username}** is already on the **{new_plan}** plan. No changes made."
+
+    try:
+        updated = session_state.update_user_plan(username, new_plan)
+    except ValueError as e:
+        return f"❌ {e}"
+
+    direction = "⬆️ Upgraded" if (
+        ["Free", "Pro", "Team", "Enterprise"].index(new_plan) >
+        ["Free", "Pro", "Team", "Enterprise"].index(old_plan)
+    ) else "⬇️ Downgraded"
+
+    plan_emoji = {"Free": "🆓", "Pro": "⭐", "Team": "👥", "Enterprise": "🏢"}
+
+    return (
+        f"## {direction}: {username.title()}\n\n"
+        f"| | Before | After |\n"
+        f"|---|---|---|\n"
+        f"| Plan | {plan_emoji.get(old_plan,'📋')} {old_plan} | {plan_emoji.get(new_plan,'📋')} **{new_plan}** |\n"
+        f"| Price | {old_user['price']} | {updated['price']} |\n"
+        f"| Seats | {old_user['seats']} | {updated['seats']} |\n"
+        f"| Actions min/month | {old_user['actions_minutes']:,} | {updated['actions_minutes']:,} |\n"
+        f"| Storage | {old_user['storage_gb']} GB | {updated['storage_gb']} GB |\n\n"
+        f"Changes are effective immediately."
+    )
+
+
+# ── Action 6: List All Accounts (Single-turn) ─────────────────────────────────
+
+def handle_list_accounts(session_state) -> str:
+    """Return a formatted list of all registered users and their plans."""
+    users = session_state.list_users()
+    if not users:
+        return "No accounts registered yet."
+
+    plan_emoji = {"Free": "🆓", "Pro": "⭐", "Team": "👥", "Enterprise": "🏢"}
+
+    lines = [f"## Registered Accounts ({len(users)} total)\n"]
+    for u in users:
+        emoji = plan_emoji.get(u["plan"], "📋")
+        lines.append(
+            f"- **{u['username']}** — {emoji} {u['plan']} ({u['price']}) "
+            f"· joined {u['joined_date']}"
+        )
+
+    lines.append(
+        "\nSay *\"Check billing for [username]\"* for full details, "
+        "or *\"Upgrade [username] to [plan]\"* to change a plan."
+    )
+    return "\n".join(lines)
