@@ -20,6 +20,7 @@ import sys
 import time
 import uuid
 import difflib
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -46,6 +47,7 @@ from agent.actions import (
     handle_list_accounts,
 )
 from agent.guardrails import get_guardrail_response, handle_insufficient_evidence
+from voice.jarvis import VoiceIO, _require_voice_dependencies
 
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -165,6 +167,161 @@ def init_session():
         st.session_state["last_rag_answer"] = ""
     if "followup_questions" not in st.session_state:
         st.session_state.followup_questions = []
+    if "jarvis_enabled" not in st.session_state:
+        st.session_state.jarvis_enabled = False
+    if "voice_last_transcript" not in st.session_state:
+        st.session_state.voice_last_transcript = ""
+
+
+class StreamlitJarvisRuntime:
+    """One-shot voice command runtime for Streamlit sidebar controls."""
+
+    def __init__(self):
+        self._speaker_io = None
+        self._speak_thread = None
+        self._speech_cancelled = threading.Event()
+        self._state_lock = threading.Lock()
+        self._status = "stopped"
+        self._last_heard = ""
+        self._last_response = ""
+        self._last_error = ""
+
+    def snapshot(self):
+        with self._state_lock:
+            return {
+                "status": self._status,
+                "last_heard": self._last_heard,
+                "last_response": self._last_response,
+                "last_error": self._last_error,
+            }
+
+    def _set_state(self, *, status=None, last_heard=None, last_response=None, last_error=None):
+        with self._state_lock:
+            if status is not None:
+                self._status = status
+            if last_heard is not None:
+                self._last_heard = last_heard
+            if last_response is not None:
+                self._last_response = last_response
+            if last_error is not None:
+                self._last_error = last_error
+
+    def _new_voice_io(self):
+        try:
+            _require_voice_dependencies()
+            return VoiceIO()
+        except Exception as exc:
+            self._set_state(status="error", last_error=str(exc))
+            return None
+
+    @staticmethod
+    def _strip_assistant_echo(text: str) -> str:
+        cleaned = text.strip()
+        patterns = [
+            r"\bhey\s+boss\s*,?\s*how\s+can\s+i\s+help\s+you\??",
+            r"\bhow\s+can\s+i\s+help\s+you\??",
+            r"\bhey\s+boss\s*,?\s*what\s+can\s+i\s+help\s+you\s+with\s+today\??",
+        ]
+        for pat in patterns:
+            cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+        return cleaned.strip(" .,!?")
+
+    def _interrupt_current_speech(self):
+        self._speech_cancelled.set()
+        if self._speaker_io is not None:
+            try:
+                self._speaker_io.stop_speaking()
+            except Exception:
+                pass
+        if self._speak_thread and self._speak_thread.is_alive():
+            self._speak_thread.join(timeout=3.0)
+        # Ensure the IO handle is cleared after the thread exits
+        self._speaker_io = None
+
+    def _speak_async(self, text: str):
+        self._interrupt_current_speech()
+        self._speech_cancelled.clear()
+        io = self._new_voice_io()
+        if io is None:
+            return
+        self._speaker_io = io
+
+        def _worker():
+            try:
+                io.speak(text)
+                if not self._speech_cancelled.is_set():
+                    self._set_state(status="ready")
+            except Exception as exc:
+                self._set_state(status="error", last_error=str(exc))
+            finally:
+                self._speaker_io = None
+
+        self._speak_thread = threading.Thread(target=_worker, daemon=True, name="jarvis-speech")
+        self._speak_thread.start()
+
+    def start_listen_once(self) -> str | None:
+        if self._speak_thread and self._speak_thread.is_alive():
+            self._set_state(status="busy speaking")
+            return None
+        io = self._new_voice_io()
+        if io is None:
+            return None
+        self._set_state(last_error="", status="listening")
+        self._interrupt_current_speech()
+
+        try:
+            io.speak("Hey boss, how can I help you?")
+            # Cooldown reduces chance of transcribing assistant TTS output.
+            time.sleep(0.6)
+            heard = io.listen(duration_sec=8.0)
+        except Exception as exc:
+            self._set_state(status="error", last_error=str(exc))
+            return None
+
+        if not heard:
+            self._set_state(status="no speech detected")
+            return None
+
+        transcript = self._strip_assistant_echo(heard)
+        if not transcript:
+            self._set_state(status="please retry")
+            return None
+
+        self._set_state(last_heard=transcript, status="captured")
+        return transcript
+
+    def speak_response(self, text: str):
+        if not text or not text.strip():
+            return
+        self._set_state(last_response=text, status="speaking response")
+        self._speak_async(text)
+
+    def stop(self):
+        self._set_state(status="stopping")
+        # Kill active speech and wait for the worker thread to fully exit
+        # before starting the goodbye message. _interrupt_current_speech()
+        # now sets _speaker_io = None after the join, so old speech is
+        # guaranteed dead when we reach the line below.
+        self._interrupt_current_speech()
+        self._speech_cancelled.clear()
+        # Speak goodbye synchronously on a tracked IO so it can also be
+        # interrupted if the user somehow triggers stop again mid-goodbye.
+        io = self._new_voice_io()
+        if io is not None:
+            self._speaker_io = io
+            try:
+                io.speak("Goodbye, hope you got your answers. At your service always")
+            except Exception as exc:
+                self._set_state(last_error=str(exc))
+            finally:
+                self._speaker_io = None
+        self._set_state(status="stopped")
+
+
+def get_jarvis_runtime() -> StreamlitJarvisRuntime:
+    if "_jarvis_runtime" not in st.session_state:
+        st.session_state["_jarvis_runtime"] = StreamlitJarvisRuntime()
+    return st.session_state["_jarvis_runtime"]
 
 
 # ── Process one user message ───────────────────────────────────────────────────
@@ -1169,12 +1326,55 @@ def main():
         st.info("Make sure you have set QWEN_API_KEY and QWEN_BASE_URL in your .env file, and run `python -m ingestion.ingest` first.")
         return
 
+    jarvis_runtime = get_jarvis_runtime()
+
     session_id = st.session_state.session_id
 
     # ── Layout ─────────────────────────────────────────────────────────────
     col_chat, col_side = st.columns([3, 1])
 
     with col_side:
+        st.markdown("#### 👏 Jarvis Voice")
+        _voice_state = jarvis_runtime.snapshot()
+
+        st.caption(f"Status: {_voice_state['status']}")
+        if _voice_state["last_error"]:
+            st.error(_voice_state["last_error"])
+
+        _voice_col1, _voice_col2 = st.columns(2)
+        with _voice_col1:
+            if st.button("Start", use_container_width=True, key="jarvis_start"):
+                st.session_state.jarvis_enabled = True
+                with st.spinner("Listening to your voice command..."):
+                    _heard = jarvis_runtime.start_listen_once()
+                if _heard:
+                    st.session_state.voice_last_transcript = _heard
+                    st.session_state["pending_voice_input"] = _heard
+                    st.rerun()
+                _s = jarvis_runtime.snapshot().get("status", "")
+                if _s == "busy speaking":
+                    st.warning("Jarvis is still speaking. Click Stop or wait, then click Start again.")
+                elif _s == "please retry":
+                    st.warning("I mostly heard my own greeting. Click Start and speak after the beep pause.")
+                elif _s == "no speech detected":
+                    st.warning("No speech detected. Click Start and try again.")
+                else:
+                    st.warning("Voice capture did not complete. Please click Start again.")
+        with _voice_col2:
+            if st.button("Stop", use_container_width=True, key="jarvis_stop"):
+                st.session_state.jarvis_enabled = False
+                st.session_state.pop("pending_voice_input", None)
+                jarvis_runtime.stop()
+                st.rerun()
+
+        _display_heard = _voice_state["last_heard"] or st.session_state.get("voice_last_transcript", "")
+        if _display_heard:
+            st.caption(f"Last heard: {_display_heard[:80]}")
+        if _voice_state["last_response"]:
+            st.caption(f"Last reply: {_voice_state['last_response'][:80]}")
+
+        st.divider()
+
         # Analytics navigation — always at top
         if st.button("📊 Analytics Dashboard", use_container_width=True, key="nav_analytics"):
             st.switch_page("pages/1_📊_Analytics.py")
@@ -1633,10 +1833,12 @@ def main():
         # ── Resolve pending inputs from button clicks ──────────────────────
         # Ticket flow buttons (category/priority/review) take top priority,
         # then follow-up suggestion clicks, then typed input.
+        _pending_voice    = st.session_state.pop("pending_voice_input", None)
         _pending_ticket   = st.session_state.pop("pending_ticket_input", None)
         _pending_followup = st.session_state.pop("pending_followup", None)
         _chat_typed       = st.chat_input("Ask a GitHub question or request an action...")
-        user_input        = _pending_ticket or _pending_followup or _chat_typed
+        user_input        = _pending_voice or _pending_ticket or _pending_followup or _chat_typed
+        _from_voice_cmd   = bool(_pending_voice)
 
         if user_input:
             # Clear any previous follow-up suggestions (new question is being asked)
@@ -1667,6 +1869,8 @@ def main():
                     st.session_state.messages.append(
                         {"role": "assistant", "content": _frust_msg, "intent": "rag_query"}
                     )
+                    if _from_voice_cmd:
+                        jarvis_runtime.speak_response(_frust_msg)
                     st.rerun()
 
                 # ── Comparative question detection ─────────────────────────────
@@ -1702,6 +1906,8 @@ def main():
                     st.session_state.messages.append(
                         {"role": "assistant", "content": _comp_stored, "intent": "rag_query"}
                     )
+                    if _from_voice_cmd:
+                        jarvis_runtime.speak_response(_comp_stored)
                     st.rerun()
 
                 # ── Decide whether to use the streaming RAG path ───────────────
@@ -1836,6 +2042,8 @@ def main():
                         "intent": intent, "sources": _src_data,
                         "new_info": _new_info_text,
                     })
+                    if _from_voice_cmd:
+                        jarvis_runtime.speak_response(response)
                     st.rerun()
 
                 else:
@@ -1861,6 +2069,8 @@ def main():
                     st.session_state.messages.append({
                         "role": "assistant", "content": response, "intent": intent
                     })
+                    if _from_voice_cmd:
+                        jarvis_runtime.speak_response(response)
                     st.rerun()
 
 

@@ -189,12 +189,22 @@ class RAGChain:
         )
 
     def _is_summary_request(self, question: str) -> bool:
-        q = question.lower()
+        q = question.lower().strip().rstrip("?!.,")
         markers = [
             "summarize", "summarise", "summary", "recap",
-            "tell me more", "what did you say", "what were the steps",
+            "tell me more", "more about that", "more about this",
+            "what did you say", "what did you mention",
+            "what were the steps", "what are the steps",
             "expand on", "elaborate", "go on", "what else",
+            "more details", "more detail",
+            "first point", "second point", "third point", "last point",
+            "can you explain more", "explain more",
+            "continue", "and then", "what was that",
         ]
+        # Also match exact short phrases that are pure follow-ups
+        exact = {"go on", "continue", "and then", "what else", "tell me more"}
+        if q in exact:
+            return True
         return any(m in q for m in markers)
 
     def _filter_relevant_chunks(self, question: str, chunks: List[SearchResult]) -> List[SearchResult]:
@@ -256,30 +266,45 @@ class RAGChain:
     ) -> str:
         """
         For follow-up questions ("tell me more", "what were the steps?"), the
-        raw question has no semantic content for the vector search. Enrich it
-        by prepending the last substantive user question from history so the
+        raw question has no semantic content for the vector search. Replace or
+        enrich it with the last substantive user question from history so the
         retriever finds the right chunks.
+
+        - Summary/follow-up requests ("tell me more", "go on", "elaborate"):
+          search using the PREVIOUS question directly — the current phrase has
+          zero signal for the vector store.
+        - Short vague questions (< 9 words, not a summary request):
+          enrich by prepending the previous question.
         """
         if not session_state or not session_id:
             return question
 
-        # Summary/follow-up requests should keep their own wording and rely on history.
-        if self._is_summary_request(question):
-            return question
+        is_followup = self._is_summary_request(question)
+        is_short    = len(question.strip().split()) <= 8
 
-        # Only enrich short / vague questions (follow-ups are typically < 9 words)
-        if len(question.strip().split()) > 8:
+        if not is_followup and not is_short:
             return question
 
         history = session_state.get_history(session_id)
 
-        # Walk backwards to find the last user message that looks substantive
+        # Walk backwards to find the last substantive user message that is not
+        # the current follow-up itself.
         for msg in reversed(history):
-            if msg["role"] == "user" and len(msg["content"].split()) > 5:
-                prior = msg["content"]
-                enriched = f"{prior} {question}"
-                logger.debug(f"Follow-up enriched: '{enriched[:80]}'")
-                return enriched
+            if msg["role"] != "user":
+                continue
+            content = msg["content"].strip()
+            if content.lower() == question.lower():
+                continue           # skip if it's the current question echoed back
+            if len(content.split()) > 5:
+                if is_followup:
+                    # "Tell me more" → search with the previous question verbatim
+                    logger.debug(f"Follow-up (summary): reusing prior query '{content[:60]}'")
+                    return content
+                else:
+                    # Short vague question → enrich with prior context
+                    enriched = f"{content} {question}"
+                    logger.debug(f"Follow-up (enriched): '{enriched[:80]}'")
+                    return enriched
 
         return question
 
