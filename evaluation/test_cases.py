@@ -209,7 +209,7 @@ def evaluate_pass(tc: TestCase) -> tuple[bool, str]:
 
     elif tc.category == "Action Execution":
         if tc.id == 12:  # billing for alice
-            if "pro" not in response_lower:
+            if "alice" not in response_lower or "pro" not in response_lower:
                 return False, "Billing check for alice did not return Pro plan"
         if tc.id == 11:  # check ticket
             if "tkt" not in response_lower and "not found" not in response_lower:
@@ -230,6 +230,13 @@ def run_tests():
     rag_chain     = RAGChain(settings)
     intent_router = IntentRouter(settings, prompts)
     session_state = SessionState(settings.sqlite_db_path)
+
+    # Keep evaluation deterministic even if manual testing mutated plans.
+    try:
+        session_state.update_user_plan("alice", "Pro")
+    except Exception:
+        pass
+
     session_id    = f"eval_{uuid.uuid4().hex[:6]}"
 
     print("\n" + "=" * 70)
@@ -259,7 +266,7 @@ def run_tests():
             elif intent_result.intent == "check_ticket":
                 tc.actual_response = handle_check_ticket(tc.input_message, session_state)
             elif intent_result.intent == "check_billing":
-                tc.actual_response = handle_check_billing(tc.input_message)
+                tc.actual_response = handle_check_billing(tc.input_message, session_state)
             elif intent_result.intent == "create_ticket":
                 tc.actual_response = handle_create_ticket(
                     session_id=session_id + f"_{tc.id}",

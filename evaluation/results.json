@@ -1,8 +1,8 @@
 {
-  "session_id": "eval_59acac",
+  "session_id": "eval_524164",
   "total": 15,
-  "passed": 13,
-  "success_rate": 86.7,
+  "passed": 15,
+  "success_rate": 100.0,
   "test_cases": [
     {
       "id": 1,
@@ -13,7 +13,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 3.6
+      "time_sec": 3.17
     },
     {
       "id": 2,
@@ -24,7 +24,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 2.32
+      "time_sec": 5.01
     },
     {
       "id": 3,
@@ -35,7 +35,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 3.04
+      "time_sec": 3.21
     },
     {
       "id": 4,
@@ -46,7 +46,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 1.64
+      "time_sec": 1.87
     },
     {
       "id": 5,
@@ -153,10 +153,10 @@
       "category": "Error Handling",
       "input": "What is GitHub's internal employee salary structure?",
       "expected_intent": "rag_query",
-      "actual_intent": "out_of_scope",
-      "passed": false,
-      "failure_reason": "Wrong intent: expected=rag_query, got=out_of_scope",
-      "time_sec": 0.36
+      "actual_intent": "rag_query",
+      "passed": true,
+      "failure_reason": "",
+      "time_sec": 1.16
     },
     {
       "id": 15,
@@ -164,10 +164,10 @@
       "category": "Memory",
       "input": "Tell me more about that",
       "expected_intent": "rag_query",
-      "actual_intent": "out_of_scope",
-      "passed": false,
-      "failure_reason": "Wrong intent: expected=rag_query, got=out_of_scope",
-      "time_sec": 0.38
+      "actual_intent": "rag_query",
+      "passed": true,
+      "failure_reason": "",
+      "time_sec": 0.51
     }
   ]
 }

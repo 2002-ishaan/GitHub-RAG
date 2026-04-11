@@ -55,6 +55,7 @@ class SessionState:
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id   TEXT PRIMARY KEY,
                     history_json TEXT NOT NULL DEFAULT '[]',
+                    current_user TEXT,
                     created_at   TEXT NOT NULL,
                     updated_at   TEXT NOT NULL
                 );
@@ -93,6 +94,11 @@ class SessionState:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 seed_users,
             )
+
+            # Backward-compatible migration for existing DBs
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+            if "current_user" not in cols:
+                conn.execute("ALTER TABLE sessions ADD COLUMN current_user TEXT")
         logger.debug("Database tables initialised")
 
     # ── Ticket methods ─────────────────────────────────────────────────────
@@ -216,6 +222,32 @@ class SessionState:
                 "DELETE FROM sessions WHERE session_id = ?",
                 (session_id,)
             )
+
+    def set_current_user(self, session_id: str, username: str) -> None:
+        """Bind a session to the last active username for pronoun resolution."""
+        now = datetime.utcnow().isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (session_id, history_json, current_user, created_at, updated_at)
+                VALUES (?, '[]', ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    current_user = excluded.current_user,
+                    updated_at   = excluded.updated_at
+                """,
+                (session_id, username.lower().strip(), now, now),
+            )
+
+    def get_current_user(self, session_id: str) -> Optional[str]:
+        """Return session-bound username, if any."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT current_user FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return row["current_user"]
 
     def close_all_tickets(self, session_id: Optional[str] = None) -> int:
         """Close all open tickets. Returns count of tickets closed."""

@@ -26,6 +26,12 @@ from openai import OpenAI
 from loguru import logger
 
 
+_GITHUB_DOMAIN_HINT_RE = re.compile(
+    r"\b(github|repository|repo|organization|team|billing|plan|authentication|2fa|security|issues|pull\s*request|actions)\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class IntentResult:
     intent:     str    # one of the 6 intents above
@@ -87,8 +93,17 @@ _BILLING_INFO_RE = re.compile(
     r'|\bwill\s+i\s+(lose|get|be|find|see)\b'
     r'|\bdo\s+i\s+(need|have|get)\b'
     r'|\b(refund|cancel|cancellation|unsubscribe)\b'
-    r'|\b(cost|price|pricing|fee|fees|charge)\b'
-    r'|\b(invoice|invoices|receipt|receipts|billing\s+history)\b',
+    r'|\b(cost|price|pricing|fee|fees|charge|charged)\b'
+    r'|\b(dispute|disputed|disputing|correction|correct|incorrect|wrong\s+charge)\b'
+    r'|\b(invoice|invoices|receipt|receipts|billing\s+history|payment\s+receipt)\b',
+    re.IGNORECASE,
+)
+
+# Account-specific billing support issues should be treated as documentation/support
+# guidance queries, not account lookup actions.
+_BILLING_SUPPORT_RE = re.compile(
+    r'\b(refund|dispute|disputed|receipt|invoice|charged|charge\s+twice|double\s+charge)\b'
+    r'|\b(payment\s+issue|billing\s+issue|billing\s+problem|receipt\s+correction)\b',
     re.IGNORECASE,
 )
 
@@ -233,6 +248,11 @@ def _regex_check(message: str) -> str | None:
         if re.search(pattern, msg_lower):
             return "create_ticket"
 
+    # Billing support requests should go to docs/support guidance (rag_query),
+    # not account lookup handlers.
+    if _BILLING_SUPPORT_RE.search(message):
+        return "rag_query"
+
     # Skip billing patterns for informational questions (cancel, refund, pricing, etc.)
     if not _BILLING_INFO_RE.search(message):
         for pattern in BILLING_PATTERNS:
@@ -326,6 +346,12 @@ class IntentRouter:
             
             if intent not in valid_intents:
                 intent = "rag_query"
+
+            # Safety override: if the user clearly asked a GitHub-domain question,
+            # never classify it as out_of_scope.
+            if intent == "out_of_scope" and _GITHUB_DOMAIN_HINT_RE.search(message):
+                intent = "rag_query"
+                confidence = min(confidence, 0.7)
 
             logger.info(
                 f"Intent (LLM): {intent} ({confidence:.2f}) | '{message[:60]}'"

@@ -235,7 +235,7 @@ def process_message(
         response = handle_check_ticket(user_input, session_state, rag_chain)
 
     elif intent == "check_billing":
-        response = handle_check_billing(user_input, session_state)
+        response = handle_check_billing(user_input, session_state, session_id=session_id)
 
     elif intent == "register_user":
         response = handle_register_user(
@@ -246,7 +246,7 @@ def process_message(
         )
 
     elif intent == "upgrade_plan":
-        response = handle_upgrade_plan(user_input, session_state)
+        response = handle_upgrade_plan(user_input, session_state, session_id=session_id)
 
     # Added: Close ticket by ID intent
     elif intent == "close_ticket_by_id":

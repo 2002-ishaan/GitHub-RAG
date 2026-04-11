@@ -62,7 +62,8 @@ class RAGResponse:
             label = _url_to_label(url)
             cites.append(f"- [{label}]({url})")
 
-        linked_answer = _linkify_answer(self.answer)
+        normalized_answer = _normalize_inline_citations(self.answer, self.sources)
+        linked_answer = _linkify_answer(normalized_answer)
 
         return (
             f"{linked_answer}\n\n"
@@ -87,6 +88,8 @@ class StreamingSetup:
 
 
 _URL_RE = re.compile(r'https?://[^\s\)\]>]+')
+_INLINE_SOURCE_CITE_RE = re.compile(r'\[Source:\s*([^,\]]+),\s*(https?://[^\]\s]+)\]')
+_PLACEHOLDER_CITE_RE = re.compile(r'\[Source:\s*<title>,\s*<url>\]')
 
 
 def _url_to_label(url: str) -> str:
@@ -107,6 +110,40 @@ def _linkify_answer(text: str) -> str:
         url = m.group(0).rstrip(".,;:!?)")
         return f"[{_url_to_label(url)}]({url})"
     return _URL_RE.sub(_replace, text)
+
+
+def _normalize_inline_citations(text: str, sources: List[SearchResult]) -> str:
+    """
+    Normalize inline citation variants into markdown links.
+    Also replaces placeholder citations with concrete links from retrieved sources.
+    """
+    if not text:
+        return text
+
+    normalized = _INLINE_SOURCE_CITE_RE.sub(
+        lambda m: f"[Source: {m.group(1).strip()}]({m.group(2).strip()})",
+        text,
+    )
+
+    unique_urls = []
+    seen = set()
+    for src in sources:
+        if src.source_file in seen:
+            continue
+        seen.add(src.source_file)
+        unique_urls.append(src.source_file)
+
+    idx = {"i": 0}
+
+    def _replace_placeholder(_: re.Match) -> str:
+        if unique_urls:
+            url = unique_urls[min(idx["i"], len(unique_urls) - 1)]
+            idx["i"] += 1
+            return f"[Source: {_url_to_label(url)}]({url})"
+        return "(see Sources below)"
+
+    normalized = _PLACEHOLDER_CITE_RE.sub(_replace_placeholder, normalized)
+    return normalized
 
 
 def build_context(chunks: List[SearchResult]) -> str:
@@ -151,6 +188,37 @@ class RAGChain:
             f"collection={settings.chroma_collection_name}"
         )
 
+    def _is_summary_request(self, question: str) -> bool:
+        q = question.lower()
+        markers = [
+            "summarize", "summarise", "summary", "recap",
+            "tell me more", "what did you say", "what were the steps",
+            "expand on", "elaborate", "go on", "what else",
+        ]
+        return any(m in q for m in markers)
+
+    def _filter_relevant_chunks(self, question: str, chunks: List[SearchResult]) -> List[SearchResult]:
+        """
+        Remove low-similarity or clearly off-topic chunks.
+        Keeps behavior conservative to reduce irrelevant citations.
+        """
+        q = question.lower()
+        is_repo_visibility = (
+            "private repo" in q
+            or "repository visibility" in q
+            or ("repository" in q and "private" in q)
+        )
+
+        filtered: List[SearchResult] = []
+        for c in chunks:
+            if c.similarity_score < 0.42:
+                continue
+            txt = c.text.lower()
+            if is_repo_visibility and "github actions" in txt and "repository" not in txt and "visibility" not in txt:
+                continue
+            filtered.append(c)
+        return filtered
+
     def _build_messages(
         self,
         question: str,
@@ -193,6 +261,10 @@ class RAGChain:
         retriever finds the right chunks.
         """
         if not session_state or not session_id:
+            return question
+
+        # Summary/follow-up requests should keep their own wording and rely on history.
+        if self._is_summary_request(question):
             return question
 
         # Only enrich short / vague questions (follow-ups are typically < 9 words)
@@ -247,6 +319,9 @@ class RAGChain:
 
         # ── Retrieve ───────────────────────────────────────────────────────
         chunks = self.retriever.search(search_query, top_k=self.settings.top_k_retrieval)
+        rel = self._filter_relevant_chunks(question, chunks)
+        if rel:
+            chunks = rel
 
         if not chunks:
             logger.warning("No chunks retrieved")
@@ -268,7 +343,8 @@ class RAGChain:
         # ── Get conversation history ───────────────────────────────────────
         chat_history = ""
         if session_state and session_id:
-            chat_history = session_state.format_history_for_prompt(session_id)
+            max_turns = 12 if self._is_summary_request(question) else 6
+            chat_history = session_state.format_history_for_prompt(session_id, max_turns=max_turns)
 
         # ── Build messages ─────────────────────────────────────────────────
         messages = self._build_messages(question, context, chat_history)
@@ -330,6 +406,9 @@ class RAGChain:
 
         # ── Retrieve ───────────────────────────────────────────────────────
         chunks = self.retriever.search(search_query, top_k=self.settings.top_k_retrieval)
+        rel = self._filter_relevant_chunks(question, chunks)
+        if rel:
+            chunks = rel
 
         if not chunks:
             logger.warning("No chunks retrieved — streaming unavailable")
@@ -343,7 +422,8 @@ class RAGChain:
         # ── Get conversation history ───────────────────────────────────────
         chat_history = ""
         if session_state and session_id:
-            chat_history = session_state.format_history_for_prompt(session_id)
+            max_turns = 12 if self._is_summary_request(question) else 6
+            chat_history = session_state.format_history_for_prompt(session_id, max_turns=max_turns)
 
         # ── Build messages ─────────────────────────────────────────────────
         messages = self._build_messages(question, context, chat_history)

@@ -363,7 +363,7 @@ def handle_check_ticket(user_message: str, session_state, rag_chain=None) -> str
 
 # ── Action 3: Check Billing Plan (Single-turn) ─────────────────────────────────
 
-def handle_check_billing(user_message: str, session_state) -> str:
+def handle_check_billing(user_message: str, session_state, session_id: Optional[str] = None) -> str:
     """
     Look up an account's billing plan from SQLite.
     Tries to extract a username from the message.
@@ -385,16 +385,37 @@ def handle_check_billing(user_message: str, session_state) -> str:
     }
     username      = None
     candidate_name = None   # the word we tried that wasn't in DB
+    lower_msg = user_message.lower()
 
-    for word in user_message.lower().split():
-        clean = re.sub(r"[^a-z0-9]", "", word)
-        if not clean or len(clean) < 2 or clean in SKIP_BILLING_WORDS:
-            continue
-        candidate_name = clean
-        user = session_state.get_user(clean)
-        if user:
-            username = clean
-            break
+    # If this is clearly a billing-support issue, do not attempt username extraction.
+    # Route users to ticket flow guidance instead of fabricated "user not found" names.
+    support_issue_re = re.compile(
+        r"\b(refund|dispute|disputed|charged|charge\s+twice|double\s+charge|receipt|invoice|payment\s+issue|billing\s+problem|correction)\b",
+        re.IGNORECASE,
+    )
+    if support_issue_re.search(lower_msg):
+        return (
+            "I can help with this billing issue. For account-specific disputes, refunds, or receipt corrections, "
+            "please create a **Billing & Payments** support ticket so it can be reviewed safely.\n\n"
+            "Say: *\"Create a support ticket\"*"
+        )
+
+    # Session pronoun resolution
+    if session_id and re.search(r"\b(my|me|mine|current_user)\b", lower_msg):
+        resolved = session_state.get_current_user(session_id)
+        if resolved:
+            username = resolved
+
+    if not username:
+        for word in lower_msg.split():
+            clean = re.sub(r"[^a-z0-9]", "", word)
+            if not clean or len(clean) < 2 or clean in SKIP_BILLING_WORDS:
+                continue
+            candidate_name = clean
+            user = session_state.get_user(clean)
+            if user:
+                username = clean
+                break
 
     if not username:
         # Build live user list from SQLite (includes newly registered users)
@@ -414,6 +435,9 @@ def handle_check_billing(user_message: str, session_state) -> str:
 
     account = session_state.get_user(username)
     plan    = account["plan"]
+
+    if session_id:
+        session_state.set_current_user(session_id, username)
 
     plan_emoji = {"Free": "🆓", "Pro": "⭐", "Team": "👥", "Enterprise": "🏢"}.get(plan, "📋")
 
@@ -628,6 +652,8 @@ def handle_register_user(
                 del _active_register_flows[session_id]
                 return f"❌ {e}"
 
+            session_state.set_current_user(session_id, user["username"])
+
             del _active_register_flows[session_id]
             return prompts["register_prompt"]["confirmation"].format(
                 username=user["username"],
@@ -661,7 +687,7 @@ def handle_register_user(
 
 # ── Action 5: Upgrade Plan (Single-turn) ──────────────────────────────────────
 
-def handle_upgrade_plan(user_message: str, session_state) -> str:
+def handle_upgrade_plan(user_message: str, session_state, session_id: Optional[str] = None) -> str:
     """
     Parse "upgrade <username> to <plan>" and update the user's plan in SQLite.
     Returns a before/after comparison card.
@@ -711,6 +737,9 @@ def handle_upgrade_plan(user_message: str, session_state) -> str:
         updated = session_state.update_user_plan(username, new_plan)
     except ValueError as e:
         return f"❌ {e}"
+
+    if session_id:
+        session_state.set_current_user(session_id, username)
 
     direction = "⬆️ Upgraded" if (
         ["Free", "Pro", "Team", "Enterprise"].index(new_plan) >
