@@ -58,6 +58,16 @@ class SessionState:
                     created_at   TEXT NOT NULL,
                     updated_at   TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS query_log (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT    NOT NULL,
+                    timestamp  TEXT    NOT NULL,
+                    intent     TEXT    NOT NULL,
+                    confidence REAL    NOT NULL DEFAULT 0.0,
+                    question   TEXT    NOT NULL DEFAULT '',
+                    is_gap     INTEGER NOT NULL DEFAULT 0
+                );
             """)
         logger.debug("Database tables initialised")
 
@@ -219,6 +229,101 @@ class SessionState:
 
         logger.info(f"Ticket closed: {ticket_id}")
         return {"success": True, "message": f"✅ Ticket **{ticket_id}** has been closed successfully."}
+
+    # ── Analytics / query log ──────────────────────────────────────────────────
+
+    def log_query(
+        self,
+        session_id: str,
+        intent: str,
+        confidence: float,
+        question: str,
+        is_gap: bool = False,
+    ) -> None:
+        """Record one query turn for analytics."""
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT INTO query_log
+                   (session_id, timestamp, intent, confidence, question, is_gap)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    datetime.utcnow().isoformat(),
+                    intent,
+                    round(confidence, 4),
+                    question[:120],
+                    1 if is_gap else 0,
+                ),
+            )
+
+    def get_analytics_data(self) -> dict:
+        """Return aggregated telemetry for the analytics dashboard."""
+        with self._get_conn() as conn:
+            intents = conn.execute(
+                "SELECT intent, COUNT(*) AS count FROM query_log "
+                "GROUP BY intent ORDER BY count DESC"
+            ).fetchall()
+
+            confidence_series = conn.execute(
+                "SELECT timestamp, confidence, intent FROM query_log "
+                "WHERE confidence > 0 ORDER BY timestamp ASC LIMIT 80"
+            ).fetchall()
+
+            top_questions = conn.execute(
+                "SELECT question, COUNT(*) AS count FROM query_log "
+                "WHERE intent='rag_query' AND is_gap=0 "
+                "GROUP BY question ORDER BY count DESC LIMIT 5"
+            ).fetchall()
+
+            gaps = conn.execute(
+                "SELECT question, timestamp FROM query_log "
+                "WHERE is_gap=1 ORDER BY timestamp DESC LIMIT 15"
+            ).fetchall()
+
+            total = conn.execute(
+                "SELECT COUNT(*) FROM query_log"
+            ).fetchone()[0]
+
+        return {
+            "total_queries":     total,
+            "intents":           [dict(r) for r in intents],
+            "confidence_series": [dict(r) for r in confidence_series],
+            "top_questions":     [dict(r) for r in top_questions],
+            "gaps":              [dict(r) for r in gaps],
+        }
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session's conversation history. Returns True if a row was removed."""
+        with self._get_conn() as conn:
+            result = conn.execute(
+                "DELETE FROM sessions WHERE session_id = ?", (session_id,)
+            )
+        deleted = result.rowcount > 0
+        if deleted:
+            logger.info(f"Session deleted: {session_id}")
+        return deleted
+
+    def list_sessions(self, limit: int = 10) -> List[dict]:
+        """Return recent sessions with session_id, first user message, and timestamp."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT session_id, history_json, created_at FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+
+        result = []
+        for row in rows:
+            history = json.loads(row["history_json"])
+            first_user_msg = next(
+                (msg["content"] for msg in history if msg["role"] == "user"), ""
+            )
+            result.append({
+                "session_id":    row["session_id"],
+                "first_message": first_user_msg,
+                "created_at":    row["created_at"],
+                "history":       history,
+            })
+        return result
 
     # Added: For sidebar UI display all open tickets
     def get_open_tickets(self) -> List[dict]:

@@ -1,5 +1,5 @@
 {
-  "session_id": "eval_bfb5ea",
+  "session_id": "eval_59acac",
   "total": 15,
   "passed": 13,
   "success_rate": 86.7,
@@ -13,7 +13,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 6.06
+      "time_sec": 3.6
     },
     {
       "id": 2,
@@ -24,7 +24,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 5.33
+      "time_sec": 2.32
     },
     {
       "id": 3,
@@ -35,7 +35,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 3.48
+      "time_sec": 3.04
     },
     {
       "id": 4,
@@ -156,7 +156,7 @@
       "actual_intent": "out_of_scope",
       "passed": false,
       "failure_reason": "Wrong intent: expected=rag_query, got=out_of_scope",
-      "time_sec": 0.59
+      "time_sec": 0.36
     },
     {
       "id": 15,
@@ -167,7 +167,7 @@
       "actual_intent": "out_of_scope",
       "passed": false,
       "failure_reason": "Wrong intent: expected=rag_query, got=out_of_scope",
-      "time_sec": 0.63
+      "time_sec": 0.38
     }
   ]
 }

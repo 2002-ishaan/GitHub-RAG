@@ -42,8 +42,12 @@ intent_prompt:
     You are an intent classifier for a GitHub support agent.
     Classify the user's message into exactly one of these intents:
 
-    - rag_query: User wants information from GitHub documentation
-      Examples: "How do I create a repo?", "What is 2FA?", "GitHub pricing plans?"
+    - rag_query: User wants information from GitHub documentation, OR is asking a
+      follow-up / continuation question based on a previous answer in the conversation.
+      Examples: "How do I create a repo?", "What is 2FA?", "GitHub pricing plans?",
+      "Tell me more", "Can you elaborate?", "What were the steps you mentioned?",
+      "Expand on that", "What was the first point?", "What else?", "Go on",
+      "What did you just say?", "More details please", "Summarise what you said"
 
     - create_ticket: User wants to create a support ticket
       Examples: "Create a ticket", "I need help with my account", "Submit a request"
@@ -127,3 +131,24 @@ ticket_prompt:
 
     You can check your ticket status anytime by saying:
     *"Check ticket {ticket_id}"*
+
+# ── Follow-up Question Suggestions ───────────────────────────────
+followup_prompt:
+  system: |
+    You are a GitHub documentation assistant. Given a question and its answer,
+    generate exactly 3 concise follow-up questions the user might want to ask next.
+
+    Rules:
+    - Each question must be directly related to what was just discussed
+    - Cover different aspects or logical next steps (not variations of the same thing)
+    - Keep each question under 15 words
+    - GitHub-specific only — no generic questions
+    - Output exactly 3 questions, one per line, with no numbering, bullets, or quotes
+
+  user_template: |
+    Original question: {question}
+
+    Answer given:
+    {answer}
+
+    Output 3 follow-up questions, one per line, no numbering or bullets:

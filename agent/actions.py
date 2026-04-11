@@ -90,6 +90,26 @@ class TicketState:
 # Key: session_id, Value: TicketState
 _active_ticket_flows: dict[str, TicketState] = {}
 
+# Stores info about the ticket most recently confirmed, so app.py can render a card.
+_last_created_ticket: dict = {}
+
+CANCEL_WORDS = {"cancel", "quit", "exit", "stop", "abort", "nevermind", "never mind"}
+CONFIRM_WORDS = {"yes", "confirm", "submit", "ok", "looks good", "correct",
+                 "proceed", "go ahead", "yep", "yeah", "y", "sure", "done"}
+EDIT_WORDS    = {"edit", "no", "change", "redo", "restart", "modify", "update", "back"}
+
+
+def get_ticket_flow_state(session_id: str) -> Optional[TicketState]:
+    """Return the current TicketState for a session, or None if no flow is active."""
+    return _active_ticket_flows.get(session_id)
+
+
+def get_last_created_ticket() -> dict:
+    """Return info about the most recently created ticket, then clear it."""
+    result = dict(_last_created_ticket)
+    _last_created_ticket.clear()
+    return result
+
 
 # ── Action 1: Create Support Ticket (Multi-turn) ───────────────────────────────
 
@@ -101,9 +121,8 @@ def handle_create_ticket(
 ) -> str:
     """
     Multi-turn ticket creation.
-    Each call advances the state machine one step.
-
-    Steps: category → description → priority → save → confirm
+    Steps: category → description → priority → review → confirm → save
+    Cancel is accepted at any step.
     """
 
     # Get or create the ticket flow for this session
@@ -113,7 +132,16 @@ def handle_create_ticket(
     state = _active_ticket_flows[session_id]
     msg   = user_message.strip().lower()
 
-    # ── Step 1: Collect category ───────────────────────────────────────────
+    # ── Escape hatch — cancel at any point ────────────────────────────────
+    if msg in CANCEL_WORDS or any(w in msg.split() for w in CANCEL_WORDS):
+        del _active_ticket_flows[session_id]
+        return (
+            "❌ **Ticket creation cancelled.**\n\n"
+            "No problem — let me know if you need anything else, "
+            "or say *\"Create a support ticket\"* whenever you're ready."
+        )
+
+    # ── Step 1: Prompt for category ────────────────────────────────────────
     if state.step == "category":
         state.step = "awaiting_category"
         return prompts["ticket_prompt"]["collecting_category"]
@@ -121,7 +149,6 @@ def handle_create_ticket(
     if state.step == "awaiting_category":
         category = VALID_CATEGORIES.get(msg)
         if not category:
-            # Try partial match
             for key, val in VALID_CATEGORIES.items():
                 if key in msg:
                     category = val
@@ -129,7 +156,7 @@ def handle_create_ticket(
 
         if not category:
             return (
-                "I didn't recognise that category. Please choose:\n\n"
+                "I didn't recognise that category. Please choose one:\n\n"
                 "1. Account & Authentication\n"
                 "2. Billing & Payments\n"
                 "3. Repository Issues\n"
@@ -147,7 +174,7 @@ def handle_create_ticket(
     # ── Step 2: Collect description ────────────────────────────────────────
     if state.step == "awaiting_description":
         if len(user_message.strip()) < 10:
-            return "Please provide a more detailed description of your issue."
+            return "Please provide a more detailed description (at least a sentence)."
 
         state.description = user_message.strip()
         state.step        = "awaiting_priority"
@@ -171,24 +198,59 @@ def handle_create_ticket(
             )
 
         state.priority = priority
-        state.step     = "done"
+        state.step     = "review"   # ← review before saving
 
-        # ── Save ticket to SQLite ──────────────────────────────────────────
-        ticket_id = session_state.create_ticket(
-            session_id=session_id,
-            category=state.category,
-            description=state.description,
-            priority=state.priority,
+        pri_emoji = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}.get(priority, "⚪")
+        return (
+            f"**Here's your ticket — review before submitting:**\n\n"
+            f"| Field | Value |\n"
+            f"|---|---|\n"
+            f"| Category | {state.category} |\n"
+            f"| Priority | {pri_emoji} {priority} |\n\n"
+            f"**Description:** {state.description}\n\n"
+            f"Confirm to submit, Edit to start over, or Cancel to exit."
         )
 
-        # Clear the flow
-        del _active_ticket_flows[session_id]
+    # ── Review step: confirm or edit ───────────────────────────────────────
+    if state.step == "review":
+        if msg in CONFIRM_WORDS or any(w in msg.split() for w in CONFIRM_WORDS):
+            ticket_id = session_state.create_ticket(
+                session_id=session_id,
+                category=state.category,
+                description=state.description,
+                priority=state.priority,
+            )
+            # Store for app.py to pick up and render a card
+            _last_created_ticket.update({
+                "ticket_id":   ticket_id,
+                "category":    state.category,
+                "description": state.description,
+                "priority":    state.priority,
+            })
+            del _active_ticket_flows[session_id]
+            return prompts["ticket_prompt"]["confirmation"].format(
+                ticket_id=ticket_id,
+                category=state.category,
+                priority=state.priority,
+            )
 
-        return prompts["ticket_prompt"]["confirmation"].format(
-            ticket_id=ticket_id,
-            category=state.category,
-            priority=state.priority,
-        )
+        elif msg in EDIT_WORDS or any(w in msg.split() for w in EDIT_WORDS):
+            state.step        = "awaiting_category"
+            state.category    = None
+            state.description = None
+            state.priority    = None
+            return (
+                "No problem — let's start over.\n\n"
+                + prompts["ticket_prompt"]["collecting_category"]
+            )
+
+        else:
+            return (
+                "Please respond with:\n"
+                "- **Yes** to submit the ticket\n"
+                "- **Edit** to start over\n"
+                "- **Cancel** to exit"
+            )
 
     # Fallback — restart the flow
     _active_ticket_flows[session_id] = TicketState()

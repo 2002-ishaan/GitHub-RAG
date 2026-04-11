@@ -77,6 +77,43 @@ OUT_OF_SCOPE_PATTERNS = [
     r"\b(celebrity|actor|movie|netflix|spotify)\b",
 ]
 
+# Follow-up / memory patterns — these are rag_query, NOT out_of_scope
+MEMORY_PATTERNS = [
+    # "tell me more / more about that"
+    r"\btell\s+me\s+more\b",
+    r"\bmore\s+about\s+(that|this|it)\b",
+    r"\bmore\s+details?\b",
+    # "what did you say/mention/mean"
+    r"\bwhat\s+did\s+you\s+(just\s+)?(say|mention|mean|list)\b",
+    r"\byou\s+(just\s+)?(said|mentioned|listed|described)\b",
+    # "expand / elaborate / clarify"
+    r"\bexpand\s+on\s+(that|this|it|the|your)\b",
+    r"\bcan\s+you\s+(elaborate|clarify|explain\s+more|expand|repeat|rephrase)\b",
+    r"\bplease\s+(elaborate|clarify|explain\s+more|expand)\b",
+    r"\belaborate\s+(on\s+)?(that|this|it|the)?\b",
+    # "what were the steps/points"
+    r"\bwhat\s+were\s+the\s+(main\s+)?(steps?|points?|details?|methods?)\b",
+    r"\bwhat\s+are\s+the\s+(steps?|points?|details?)\s+you\b",
+    # "summarise what you said"
+    r"\b(summarise|summarize|summarised|summarized)\s+what\s+you\s+(said|mentioned)\b",
+    # "what was the first/second/last point/step"
+    r"\bwhat\s+was\s+the\s+(first|second|third|last)\s+(step|point|item|thing)\b",
+    r"\bthe\s+(first|second|third|last)\s+(step|point|item|thing)\s+you\b",
+    r"\bthat\s+(first|second|third|last)\s+(point|step|thing)\b",
+    r"\b(first|second|third|last)\s+point\b",
+    # "the steps/points you mentioned"
+    r"\bthe\s+(steps?|points?)\s+you\s+(just\s+)?(mentioned|listed|said|described)\b",
+    # "go on / continue / what else"
+    r"\bwhat\s+else\b",
+    r"\bgo\s+on\b",
+    r"\bcontinue\s+(from|with|on)?\b",
+    # "previous answer/response"
+    r"\b(previous|last)\s+(answer|response|point|step|message)\b",
+    r"\bthat\s+last\s+(thing|point|answer|response|part)\b",
+    # very short follow-ups that can't be GitHub questions
+    r"^(ok|okay|continue|go\s+on|and\s+then\??|what\s+else\??)$",
+]
+
 # ── NEW: specific ticket close ───────────
 CLOSE_SINGLE_TICKET_PATTERNS = [
     r"\bclose\s+(ticket\s+)?(TKT[-\s]?\d+)\b",
@@ -121,6 +158,10 @@ def _regex_check(message: str) -> str | None:
     for pattern in BILLING_PATTERNS:
         if re.search(pattern, msg_lower):
             return "check_billing"
+
+    for pattern in MEMORY_PATTERNS:
+        if re.search(pattern, msg_lower):
+            return "rag_query"
 
     for pattern in OUT_OF_SCOPE_PATTERNS:
         if re.search(pattern, msg_lower):
