@@ -161,6 +161,8 @@ def init_session():
         st.session_state.messages = []
     if "ticket_step" not in st.session_state:
         st.session_state.ticket_step = None
+    if "last_rag_answer" not in st.session_state:
+        st.session_state["last_rag_answer"] = ""
     if "followup_questions" not in st.session_state:
         st.session_state.followup_questions = []
 
@@ -252,7 +254,7 @@ def process_message(
     
     elif intent == "close_tickets":
         from agent.actions import handle_close_tickets
-        response = handle_close_tickets(user_input, session_state)
+        response = handle_close_tickets(session_state)
 
     elif intent == "list_accounts":
         response = handle_list_accounts(session_state)
@@ -584,34 +586,6 @@ def _generate_pdf(messages: list, session_id: str) -> bytes:
     return bytes(pdf.output())
 
 
-# ── New-content diff helper ───────────────────────────────────────────────────
-
-def _get_new_sentences(prev_text: str, new_text: str) -> list:
-    """
-    Return sentences from new_text that are substantially different from prev_text.
-    Used to highlight what's genuinely new in a follow-up answer.
-    """
-    def _body(t: str) -> str:
-        return t.split("---")[0].strip() if "---" in t else t.strip()
-
-    prev_sents = [
-        s.strip() for s in re.split(r'(?<=[.!?])\s+', _body(prev_text))
-        if len(s.strip()) > 15
-    ]
-    new_sents = [
-        s.strip() for s in re.split(r'(?<=[.!?])\s+', _body(new_text))
-        if len(s.strip()) > 15
-    ]
-
-    new_only = []
-    for sent in new_sents:
-        is_new = not any(
-            difflib.SequenceMatcher(None, sent.lower(), ps.lower()).ratio() > 0.55
-            for ps in prev_sents
-        )
-        if is_new:
-            new_only.append(sent)
-    return new_only
 
 
 # ── Apple design-system CSS ────────────────────────────────────────────────────
@@ -1232,6 +1206,7 @@ def main():
             st.session_state.messages = []
             st.session_state.session_id = str(uuid.uuid4())[:8]
             st.session_state.followup_questions = []
+            st.session_state["last_rag_answer"] = ""
             st.rerun()
 
         st.divider()
@@ -1426,7 +1401,6 @@ def main():
                 """)
 
         # Display chat history
-        _prev_assistant_content = None  # track previous assistant message for diff
         for _msg_idx, msg in enumerate(st.session_state.messages):
             with st.chat_message(msg["role"]):
                 if msg["role"] == "assistant" and msg.get("intent"):
@@ -1502,26 +1476,19 @@ def main():
                 else:
                     st.markdown(msg["content"])
 
-                # ── "What's new" highlight for follow-up answers ───────────────
-                # When there's a prior assistant answer to compare against, show
-                # new sentences highlighted green so the memory feature is visible.
+                # ── "What's new" expander (LLM-based, RAG responses only) ────────
+                _new_info = msg.get("new_info", "")
                 if (
-                    _is_last
-                    and msg["role"] == "assistant"
-                    and _prev_assistant_content is not None
+                    msg["role"] == "assistant"
+                    and _new_info
+                    and _new_info.strip().upper() != "NOTHING_NEW"
                 ):
-                    new_sents = _get_new_sentences(_prev_assistant_content, msg["content"])
-                    if new_sents:
+                    with st.expander("💡 What's new in this response", expanded=False):
                         st.html(
-                            '<div style="margin-top:10px;padding:10px 14px;'
-                            'background:#DAFBE1;border-left:3px solid #1A7F37;'
-                            'border-radius:0 6px 6px 0;">'
-                            '<div style="font-size:11px;font-weight:600;color:#1A7F37;'
-                            'letter-spacing:0.3px;margin-bottom:6px;">✨ NEW INFORMATION</div>'
-                            + "".join(
-                                f'<p style="margin:3px 0;font-size:13px;color:#1F2328;">{s}</p>'
-                                for s in new_sents
-                            )
+                            '<div style="background:#EBF5FF;border-radius:8px;'
+                            'padding:10px 14px;font-family:-apple-system,sans-serif;'
+                            'font-size:13px;color:#1D1D1F;line-height:1.6;">'
+                            + _new_info.replace("\n", "<br>")
                             + "</div>"
                         )
 
@@ -1570,10 +1537,6 @@ def main():
                               </div>
                             </div>
                             """)
-
-                # Track latest assistant message for the next diff
-                if msg["role"] == "assistant":
-                    _prev_assistant_content = msg["content"]
 
                 # Follow-up suggestion buttons live HERE — in the messages loop —
                 # so they are always rendered on every rerun and Streamlit can
@@ -1839,6 +1802,24 @@ def main():
                             for src in stream_setup.sources
                         ]
 
+                    # ── "What's new" LLM diff ─────────────────────────────────
+                    # Compare against the previous RAG answer using the LLM.
+                    # Result is stored in the message dict so the messages loop
+                    # can render the expander on every subsequent rerun without
+                    # re-calling the LLM.
+                    _new_info_text = ""
+                    _prev_rag = st.session_state.get("last_rag_answer", "")
+                    if _answered and full_answer and _prev_rag:
+                        try:
+                            _new_info_text = rag_chain.generate_new_info(
+                                _prev_rag, full_answer
+                            )
+                        except Exception as _ni_exc:
+                            logger.warning(f"generate_new_info: {_ni_exc}")
+                    # Always update last_rag_answer when we have a real answer
+                    if _answered and full_answer:
+                        st.session_state["last_rag_answer"] = full_answer
+
                     # ── Log to analytics ──────────────────────────────────────
                     _conf = _intent_result.confidence if _intent_result else 0.8
                     session_state.log_query(
@@ -1853,6 +1834,7 @@ def main():
                     st.session_state.messages.append({
                         "role": "assistant", "content": response,
                         "intent": intent, "sources": _src_data,
+                        "new_info": _new_info_text,
                     })
                     st.rerun()
 

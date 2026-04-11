@@ -62,10 +62,35 @@ CHECK_TICKET_PATTERNS = [
 ]
 
 BILLING_PATTERNS = [
-    r"\b(check|view|see)\s+(my\s+)?(billing|plan|subscription)\b",
+    # Explicit account lookup — "check my billing", "view my plan", "see billing"
+    # "subscription" intentionally excluded: it appears in cancel/refund questions
+    r"\b(check|view|show|see)\s+(my\s+)?(billing|plan)\b",
+    # Named user lookup — "billing for alice", "check billing for bob"
+    r"\bbilling\s+for\s+[a-z][a-z0-9\-]{1,38}\b",
+    r"\b(check|view|show)\s+(billing|plan)\s+for\s+[a-z][a-z0-9\-]{1,38}\b",
+    # "what plan am I on", "what plan is alice on/using"
     r"\bwhat\s+plan\s+(am\s+i|is\s+\w+)\s+(on|using)\b",
+    # "my account plan"
     r"\bmy\s+account\s+plan\b",
 ]
+
+# Informational billing questions are RAG queries, NOT check_billing actions.
+# If ANY of these phrases appear, skip the billing regex entirely so the message
+# goes to the LLM (which the updated prompt guides toward rag_query).
+_BILLING_INFO_RE = re.compile(
+    r'\bhow\s+(do\s+i|can\s+i|to|does)\b'
+    r'|\bwhere\s+(do\s+i|can\s+i|is|are)\b'
+    r'|\bcan\s+i\s+(get|have|request|receive|cancel|find|access|download)\b'
+    r'|\bwhat\s+happens\b'
+    r'|\bhow\s+much\b'
+    r'|\bwhat\s+if\b'
+    r'|\bwill\s+i\s+(lose|get|be|find|see)\b'
+    r'|\bdo\s+i\s+(need|have|get)\b'
+    r'|\b(refund|cancel|cancellation|unsubscribe)\b'
+    r'|\b(cost|price|pricing|fee|fees|charge)\b'
+    r'|\b(invoice|invoices|receipt|receipts|billing\s+history)\b',
+    re.IGNORECASE,
+)
 
 OUT_OF_SCOPE_PATTERNS = [
     r"\b(weather|forecast|temperature|rain)\b",
@@ -208,9 +233,11 @@ def _regex_check(message: str) -> str | None:
         if re.search(pattern, msg_lower):
             return "create_ticket"
 
-    for pattern in BILLING_PATTERNS:
-        if re.search(pattern, msg_lower):
-            return "check_billing"
+    # Skip billing patterns for informational questions (cancel, refund, pricing, etc.)
+    if not _BILLING_INFO_RE.search(message):
+        for pattern in BILLING_PATTERNS:
+            if re.search(pattern, msg_lower):
+                return "check_billing"
 
     for pattern in MEMORY_PATTERNS:
         if re.search(pattern, msg_lower):

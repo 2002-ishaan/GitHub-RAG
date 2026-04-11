@@ -11,12 +11,9 @@ ACTION 5 — upgrade_plan     (SINGLE-TURN) — updates existing user's plan in 
 ────────────────────────────────────────────────────────────────
 """
 
-import json
 import re
-from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-from loguru import logger
 
 VALID_CATEGORIES = {
     "1": "Account & Authentication",
@@ -378,6 +375,13 @@ def handle_check_billing(user_message: str, session_state) -> str:
         "check", "view", "see", "billing", "plan", "subscription",
         "what", "is", "for", "my", "the", "on", "using", "account",
         "github", "show", "get", "details",
+        # Informational words — must never be extracted as usernames
+        "how", "where", "do", "does", "can", "cancel", "cancellation", "refund",
+        "request", "cost", "price", "pricing", "fee", "fees", "charge",
+        "downgrade", "upgrade", "change", "switch", "much", "if",
+        "will", "lose", "have", "need", "unsubscribe", "happens",
+        "invoice", "invoices", "receipt", "receipts", "find", "access",
+        "download", "history", "see", "locate", "payment",
     }
     username      = None
     candidate_name = None   # the word we tried that wasn't in DB
@@ -451,7 +455,7 @@ def handle_close_ticket_by_id(user_message: str, session_state) -> str:
     result = session_state.close_ticket_by_id(ticket_id)
     return result["message"]
 
-def handle_close_tickets(user_message: str, session_state) -> str:
+def handle_close_tickets(session_state) -> str:
     """Close all open tickets."""
     count = session_state.close_all_tickets()
     if count == 0:

@@ -21,6 +21,18 @@ rag_prompt:
     4. Never speculate beyond what the context says.
     5. Be concise and helpful.
     6. Do NOT answer questions unrelated to GitHub (out-of-scope).
+    7. Questions about cancelling subscriptions, requesting refunds, subscription
+       pricing, billing cycles, or plan feature comparisons are GitHub documentation
+       questions — answer them from the context provided, do NOT treat them as
+       account lookup requests.
+
+    FORMATTING RULES — always follow these:
+    - Use numbered steps (1. 2. 3.) when explaining a process or sequence
+    - Use bullet points for lists of options or features
+    - Add a line break between each step
+    - Keep each step concise — one action per step
+    - Never return a wall of text — always break into readable chunks
+    - Bold important UI elements like button names using **bold**
 
   user_template: |
     CONTEXT (use only this to answer):
@@ -55,8 +67,15 @@ intent_prompt:
     - check_ticket: User wants to check status of an existing ticket
       Examples: "Check ticket TKT-001", "What is the status of my ticket?", "Ticket status"
 
-    - check_billing: User wants to know about their account plan
-      Examples: "What plan am I on?", "Check my billing", "What plan does user X have?"
+    - check_billing: User wants to LOOK UP a specific account's current plan in the system.
+      Must be a direct account lookup — NOT a question about billing policies or features.
+      Examples: "What plan am I on?", "Check my billing", "What plan does alice have?",
+                "Billing for bob", "Show me my current plan", "View plan for carol"
+      NOT check_billing: "How do I cancel my subscription?", "Can I get a refund?",
+                         "How much does GitHub Pro cost?", "What happens if I downgrade?",
+                         "What is a billing cycle?", "How do I change my payment method?",
+                         "Request a refund", "Cancel my plan", "Subscription pricing"
+      (those are rag_query — the user wants information from docs, not to look up an account)
 
     - register_user: User explicitly wants to CREATE or REGISTER a new account FOR a specific person.
       Must contain an action word (register, add, create, onboard) AND reference a person or "for [name]".

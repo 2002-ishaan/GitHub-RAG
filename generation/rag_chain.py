@@ -375,6 +375,44 @@ class RAGChain:
             },
         )
 
+    def generate_new_info(self, previous_answer: str, current_answer: str) -> str:
+        """
+        Compare two RAG answers and return genuinely new information points.
+
+        Returns bullet-point text, or the sentinel "NOTHING_NEW" when nothing
+        new was added (or if comparison fails). Callers should show output only
+        when the return value is NOT "NOTHING_NEW".
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": "You identify new information. Be extremely brief.",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Previous answer: {previous_answer}\n\n"
+                    f"New answer: {current_answer}\n\n"
+                    "What facts appear in the new answer that were NOT mentioned "
+                    "in the previous answer? List only genuinely new points in "
+                    "1-2 bullet points. If nothing is new or there is no previous "
+                    "answer, respond with exactly: NOTHING_NEW"
+                ),
+            },
+        ]
+        try:
+            raw = self.client.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=messages,
+                temperature=0.0,
+                max_tokens=120,
+            ).choices[0].message.content.strip()
+            logger.debug(f"generate_new_info result: {raw[:80]}")
+            return raw
+        except Exception as exc:
+            logger.warning(f"generate_new_info failed: {exc}")
+            return "NOTHING_NEW"
+
     def suggest_followups(self, question: str, answer: str) -> List[str]:
         """
         Generate 3 follow-up question suggestions based on the Q&A just shown.
