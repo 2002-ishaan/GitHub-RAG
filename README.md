@@ -73,7 +73,7 @@ Jarvis TTS speaks assistant reply (when voice mode is on)
 ## Project Structure
 
 ```
-finsight-rag/
+GitHub-RAG/
 ├── ID.txt                    ← YOUR student ID (create this yourself — see Step 4)
 ├── configs/
 │   ├── settings.py           ← Central config, reads ID.txt for API key
