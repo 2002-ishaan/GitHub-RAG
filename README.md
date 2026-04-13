@@ -10,35 +10,46 @@ Answers questions from GitHub's public documentation, creates and manages suppor
 
 | Capability | Description |
 |---|---|
-| 🔍 Knowledge Q&A | Answers GitHub questions with source URL citations |
+| 🔍 Knowledge Q&A | Answers GitHub questions with source URL citations and a confidence score |
 | 🎫 Support Tickets | Multi-turn ticket creation (4 steps) saved to SQLite |
-| 📋 Ticket Lookup | Check any ticket by ID across sessions |
-| 💳 Billing Checker | Returns mock account plan (Free / Pro / Team / Enterprise) |
-| 🔒 Close Tickets | Closes all open tickets in one command |
+| 📋 Ticket Lookup | Check any ticket by ID; RAG-augmented ticket status responses |
+| 🔒 Close Tickets | Close all open tickets in one command, or close a specific ticket by ID |
+| 💳 Billing Checker | Returns account plan details from SQLite user registry |
+| 👤 User Registration | Multi-turn flow to register new users with a chosen plan |
+| ⚡ Plan Upgrades | Upgrade or downgrade any account between Free / Pro / Team / Enterprise |
+| 📋 List Accounts | View all registered accounts and their plans in one command |
+| 🎙️ Voice Interface | Jarvis voice mode — speak your question, hear the answer read back |
 | 🚫 Guardrails | Blocks prompt injection and out-of-scope questions |
 | 💬 Memory | Remembers conversation context within a session |
+| 📊 Analytics | Live dashboard: intent distribution, confidence trend, knowledge gaps |
+| 📄 PDF Export | Download the full conversation as a formatted PDF |
 
 ---
 
 ## Architecture
 
 ```
-User Message
+User Message (text or 🎙️ voice via Jarvis)
      ↓
-Intent Router (regex + Qwen LLM)
+Intent Router (regex + Qwen LLM) — 11 intents
      ↓
- ┌───────────────────────────────────────────┐
- │  rag_query    → ChromaDB → Qwen → Answer  │
- │  create_ticket → Multi-turn State Machine  │
- │  check_ticket  → SQLite Lookup             │
- │  check_billing → Mock Account DB           │
- │  close_tickets → SQLite Update             │
- │  out_of_scope  → Polite Rejection          │
- │  injection     → Block + Warn              │
- └───────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────┐
+ │  rag_query          → ChromaDB → Qwen → Answer           │
+ │  create_ticket      → Multi-turn State Machine            │
+ │  check_ticket       → SQLite Lookup + RAG answer          │
+ │  check_billing      → SQLite User Registry                │
+ │  register_user      → Multi-turn State Machine            │
+ │  upgrade_plan       → SQLite Plan Update                  │
+ │  list_accounts      → SQLite User Registry                │
+ │  close_tickets      → SQLite Bulk Update                  │
+ │  close_ticket_by_id → SQLite Single Ticket Update         │
+ │  out_of_scope       → Polite Rejection                    │
+ │  prompt_injection   → Block + Warn                        │
+ └──────────────────────────────────────────────────────────┘
      ↓
-SQLite (tickets + conversation history)
-Streamlit UI (intent badges + ticket sidebar)
+SQLite (tickets + users + conversation history)
+Streamlit UI (intent badges + ticket sidebar + analytics page)
+Jarvis TTS speaks assistant reply (when voice mode is on)
 ```
 
 ## Tech Stack
@@ -46,13 +57,15 @@ Streamlit UI (intent badges + ticket sidebar)
 | Component | Technology |
 |---|---|
 | LLM | Qwen3-30b via course endpoint (OpenAI-compatible) |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local) |
+| Embeddings | BAAI/bge-base-en-v1.5 via A2 course endpoint (API, not local) |
 | Vector Store | ChromaDB (1,325 chunks from 230 GitHub Docs pages) |
-| Persistence | SQLite (tickets + conversation history) |
+| Persistence | SQLite (tickets + users + conversation history) |
+| Voice I/O | `voice/jarvis.py` — SpeechRecognition (STT) + pyttsx3 (TTS) |
 | Web Scraping | BeautifulSoup4 |
 | Config | Pydantic + YAML prompt versioning |
 | Logging | Loguru |
-| UI | Streamlit |
+| UI | Streamlit (multi-page: chat + analytics dashboard) |
+| PDF Export | fpdf2 |
 | Evaluation | 15 structured test cases, results.json |
 
 ---
@@ -67,18 +80,23 @@ finsight-rag/
 │   └── prompts.yaml          ← All LLM prompts, version controlled
 ├── ingestion/
 │   ├── scraper.py            ← Scrapes GitHub Docs → JSON files
-│   └── ingest.py             ← Loads JSON → ChromaDB embeddings
+│   ├── chunker.py            ← Text splitting logic (recursive character splitter)
+│   └── ingest.py             ← Loads JSON → embeddings via A2 API → ChromaDB
 ├── retrieval/
-│   └── vector_retriever.py   ← Semantic search over ChromaDB
+│   └── vector_retriever.py   ← Semantic search over ChromaDB via A2 embeddings API
 ├── generation/
 │   └── rag_chain.py          ← RAG pipeline with memory + Qwen
 ├── agent/
-│   ├── intent_router.py      ← Classifies every message (7 intents)
-│   ├── actions.py            ← All actions (ticket, billing, close)
+│   ├── intent_router.py      ← Classifies every message (11 intents)
+│   ├── actions.py            ← All actions (ticket, billing, register, upgrade, list)
 │   ├── session_state.py      ← SQLite persistence layer
 │   └── guardrails.py         ← Injection + OOS blocking
+├── voice/
+│   └── jarvis.py             ← Voice I/O: microphone STT + TTS speaker output
 ├── dashboard/
-│   └── app.py                ← Streamlit UI
+│   ├── app.py                ← Streamlit UI (chat + Jarvis sidebar + PDF export)
+│   └── pages/
+│       └── 1_📊_Analytics.py ← Live analytics: intent distribution, confidence, gaps
 ├── evaluation/
 │   ├── test_cases.py         ← 15 structured test cases
 │   └── results.json          ← Auto-generated after running eval
@@ -122,13 +140,19 @@ source venv/bin/activate        # Mac/Linux
 ---
 
 ### Step 3 — Install dependencies
-
 ```bash
 pip install -r requirements.txt
 pip install "openai==1.30.0" "httpx==0.27.0"
 ```
 
-This installs everything including ChromaDB, sentence-transformers, Streamlit, and the OpenAI SDK.
+This installs everything including ChromaDB, Streamlit, fpdf2, and the OpenAI SDK.
+
+For the Jarvis voice feature, also install the voice dependencies:
+```bash
+pip install SpeechRecognition pyttsx3 pyaudio
+```
+
+> ⚠️ **pyaudio on Mac** requires `brew install portaudio` first. On Windows, install the prebuilt wheel: `pip install pipwin && pipwin install pyaudio`. Voice is optional — the app runs fully without it.
 
 ---
 
@@ -237,17 +261,24 @@ Runs 15 test cases across all capabilities and saves results to `evaluation/resu
 
 | Say this | What happens |
 |---|---|
-| `"How do I create a private repo?"` | RAG answer with GitHub Docs source URLs |
+| `"How do I create a private repo?"` | RAG answer with GitHub Docs source URLs and confidence score |
 | `"How do I set up 2FA?"` | Step-by-step answer with citations |
 | `"Create a support ticket"` | 4-turn flow: category → description → priority → saved |
-| `"Check ticket TKT-001"` | Returns ticket details from SQLite |
-| `"Check billing for alice"` | Returns Pro plan details (mock account) |
-| `"Check billing for bob"` | Returns Team plan details |
+| `"Check ticket TKT-001"` | Returns ticket details + RAG-generated guidance from SQLite |
+| `"Close ticket TKT-001"` | Closes that specific ticket; sidebar updates |
 | `"Close all active tickets"` | Closes all open tickets, sidebar updates |
+| `"Check billing for alice"` | Returns alice's plan details from SQLite |
+| `"Register a new account for sarah"` | Multi-turn flow: username → plan → confirm → saved to SQLite |
+| `"Upgrade alice to Enterprise"` | Updates alice's plan in SQLite, shows before/after comparison |
+| `"List all accounts"` | Shows all registered users and their current plans |
 | `"Tell me a joke"` | Blocked — out-of-scope guardrail fires |
 | `"Ignore all previous instructions"` | Blocked — prompt injection guardrail fires |
+| 🎙️ Click **Start** in the sidebar | Jarvis listens for 8 seconds, transcribes, processes, speaks the reply |
 
-### Mock Billing Accounts
+## Default Billing Accounts
+
+These accounts are seeded into SQLite on first run. New accounts can be added at any time with `"Register a new account for [username]"`.
+
 | Username | Plan |
 |---|---|
 | alice | Pro |
@@ -259,10 +290,15 @@ Runs 15 test cases across all capabilities and saves results to `evaluation/resu
 
 ## Course Endpoint Details
 
-- **Base URL:** `https://rsm-8430-lab2.bjlkeng.io/v1`
-- **API Key:** Your student ID (from `ID.txt` line 3)
-- **LLM Model:** `qwen3-30b-a3b-fp8` (model name is ignored by the server)
-- **Embedding:** Local `sentence-transformers/all-MiniLM-L6-v2` (no API needed)
+| | Value |
+|---|---|
+| **LLM / Chat Base URL** | `https://rsm-8430-finalproject.bjlkeng.io/v1` |
+| **Embeddings Base URL** | `https://rsm-8430-a2.bjlkeng.io/v1` |
+| **API Key** | Your student ID (from `ID.txt` line 3) |
+| **LLM Model** | `IGNORED` (model name is ignored by the server) |
+| **Embedding Model** | `BAAI/bge-base-en-v1.5` |
+
+> ⚠️ Both endpoints use the same student ID as the API key. The embedding endpoint is called at both ingestion time and query time — they must match or retrieval will silently fail.
 
 ---
 
@@ -276,13 +312,12 @@ Current success rate: **87% (13/15 test cases passing)**
 | Intent Routing | 2 | ✅ |
 | OOS Rejection | 2 | ✅ |
 | Guardrails | 1 | ✅ |
-| Action Execution | 3 | ✅ |
+| Multi-turn Action | 1 | ✅ |
+| Action Execution | 2 | ✅ |
 | Error Handling | 2 | ⚠️ Partial |
 | Memory/Persistence | 1 | ✅ |
 
 ---
-
-## Troubleshooting
 
 | Error | Fix |
 |---|---|
@@ -292,6 +327,10 @@ Current success rate: **87% (13/15 test cases passing)**
 | `No JSON files in github_docs` | Run `python3 ingestion/scraper.py` first |
 | `0 chunks stored` | Check `data/raw/github_docs/` has 230 JSON files |
 | App loads but answers are bad | Re-run ingestion — ChromaDB may be empty or corrupt |
+| Embedding errors at ingest or query time | Both steps must use the same A2 endpoint and `BAAI/bge-base-en-v1.5` model |
+| `No module named 'speech_recognition'` | Run `pip install SpeechRecognition pyttsx3 pyaudio` |
+| `pyaudio` install fails | Mac: `brew install portaudio` first. Windows: `pipwin install pyaudio` |
+| Voice captures its own TTS output | Click **Stop**, wait for Jarvis to finish speaking, then click **Start** again |
 
 ---
 
