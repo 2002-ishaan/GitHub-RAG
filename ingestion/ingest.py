@@ -2,13 +2,14 @@
 ingestion/ingest.py
 ────────────────────────────────────────────────────────────────
 Main ingestion pipeline. Loads scraped GitHub Docs JSON files
-into ChromaDB using LOCAL sentence-transformers embeddings.
+into ChromaDB using the course A2 embeddings endpoint.
 
 NOTE ON EMBEDDINGS:
-    The course endpoint only supports chat completions, not the
-    embeddings API. We use sentence-transformers locally for
-    ingestion (free, no API needed). The same model is used
-    at query time so vectors are compatible.
+    Per professor's instructions, embeddings use the A2 API
+    endpoint (https://rsm-8430-a2.bjlkeng.io/v1) with the
+    BAAI/bge-base-en-v1.5 model via the OpenAI-compatible
+    embeddings API. The same endpoint and model are used at
+    query time so vectors are always compatible.
 
 HOW TO RUN:
     python -m ingestion.ingest
@@ -28,7 +29,7 @@ from loguru import logger
 from tqdm import tqdm
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 
 from configs.settings import load_settings, setup_logging
 
@@ -85,17 +86,30 @@ def load_github_docs(github_docs_dir: Path) -> List[dict]:
     return chunks
 
 
+def embed_texts(client: OpenAI, texts: List[str], model: str) -> List[List[float]]:
+    """Embed a batch of texts using the A2 OpenAI-compatible embeddings endpoint."""
+    response = client.embeddings.create(
+        model=model,
+        input=texts,
+    )
+    # Returns embeddings in the same order as input
+    return [item.embedding for item in response.data]
+
+
 def run_ingestion(data_dir: Path, settings) -> dict:
-    """Main ingestion: load docs → embed locally → store in ChromaDB."""
+    """Main ingestion: load docs → embed via A2 API → store in ChromaDB."""
 
     chunks = load_github_docs(data_dir / "raw" / "github_docs")
     if not chunks:
         return {"status": "error", "message": "No chunks found"}
 
-    # Local embedding model — fast, free, no API needed
-    logger.info("Loading local embedding model (sentence-transformers)...")
-    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    logger.success("Embedding model loaded")
+    # A2 embeddings endpoint (per professor's instructions)
+    logger.info(f"Connecting to embeddings endpoint: {settings.embedding_base_url}")
+    embed_client = OpenAI(
+        api_key=settings.qwen_api_key,
+        base_url=settings.embedding_base_url,
+    )
+    logger.success(f"Embeddings client ready | model={settings.embedding_model}")
 
     # ChromaDB
     chroma_client = chromadb.PersistentClient(
@@ -112,7 +126,7 @@ def run_ingestion(data_dir: Path, settings) -> dict:
     )
 
     # Embed and store in batches
-    logger.info(f"Embedding {len(chunks)} chunks...")
+    logger.info(f"Embedding {len(chunks)} chunks via A2 API...")
     start  = time.time()
     stored = 0
 
@@ -120,12 +134,7 @@ def run_ingestion(data_dir: Path, settings) -> dict:
         batch = chunks[batch_start: batch_start + BATCH_SIZE]
         texts = [c["text"] for c in batch]
 
-        embeddings = embedding_model.encode(
-            texts,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        ).tolist()
+        embeddings = embed_texts(embed_client, texts, settings.embedding_model)
 
         collection.upsert(
             ids=[c["chunk_id"] for c in batch],

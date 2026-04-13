@@ -43,6 +43,8 @@ class IntentResult:
 
 INJECTION_PATTERNS = [
     r"ignore\s+(all\s+)?previous\s+instructions",
+    r"\w*nore\s+(all\s+)?previous\s+instructions",  # catches "gnore...", typos
+    r"previous\s+instructions",                      # catches any variant
     r"disregard\s+your\s+(system\s+)?prompt",
     r"pretend\s+you\s+are",
     r"you\s+are\s+now\s+a",
@@ -51,6 +53,8 @@ INJECTION_PATTERNS = [
     r"jailbreak",
     r"dan\s+mode",
     r"override\s+your",
+    r"tell\s+me\s+your\s+(system\s+)?prompt",
+    r"reveal\s+your\s+(system\s+)?prompt",
 ]
 
 TICKET_PATTERNS = [
@@ -169,10 +173,11 @@ CLOSE_TICKET_PATTERNS = [
 ]
 
 LIST_ACCOUNTS_PATTERNS = [
-    r"\blist\s+(all\s+)?(users?|accounts?|billing\s+accounts?)\b",
-    r"\bshow\s+(me\s+)?(all\s+)?(users?|accounts?|billing\s+accounts?)\b",
-    r"\ball\s+(users?|accounts?|billing\s+accounts?)\b",
+    r"\blist\s+(all\s+)?(registered\s+)?(users?|accounts?|billing\s+accounts?)\b",
+    r"\bshow\s+(me\s+)?(all\s+)?(registered\s+)?(users?|accounts?|billing\s+accounts?)\b",
+    r"\ball\s+(registered\s+)?(users?|accounts?|billing\s+accounts?)\b",
     r"\bwho\s+(is\s+)?registered\b",
+    r"\bregistered\s+(users?|accounts?)\b",
 ]
 
 REGISTER_USER_PATTERNS = [

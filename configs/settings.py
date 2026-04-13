@@ -3,8 +3,9 @@ configs/settings.py
 ────────────────────────────────────────────────────────────────
 Central configuration for the GitHub Documentation Assistant.
 
-ENDPOINT DETAILS (from course lab files):
-    - LLM base URL  : https://rsm-8430-lab2.bjlkeng.io/v1
+ENDPOINT DETAILS (per professor's final project instructions):
+    - LLM / chat    : https://rsm-8430-finalproject.bjlkeng.io/v1
+    - Embeddings    : https://rsm-8430-a2.bjlkeng.io/v1
     - API key       : your student ID (read from ID.txt line 3)
     - LLM model     : IGNORED (server ignores model name)
     - Embedding     : BAAI/bge-base-en-v1.5
@@ -43,14 +44,15 @@ def _read_student_id() -> str:
 class Settings(BaseModel):
     """All runtime settings in one validated object."""
 
-    # ── LLM — Course endpoint ─────────────────────────────────────────────
+    # ── LLM — Final project chat endpoint ────────────────────────────────
     qwen_api_key:    str
-    qwen_base_url:   str   = "https://rsm-8430-lab2.bjlkeng.io/v1"
+    qwen_base_url:   str   = "https://rsm-8430-finalproject.bjlkeng.io/v1"
     llm_model:       str   = "IGNORED"
     llm_temperature: float = 0.0
 
-    # ── Embeddings — same endpoint, bge model ─────────────────────────────
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # ── Embeddings — A2 endpoint (per professor's instructions) ───────────
+    embedding_base_url: str = "https://rsm-8430-a2.bjlkeng.io/v1"
+    embedding_model:    str = "BAAI/bge-base-en-v1.5"
 
     # ── ChromaDB ──────────────────────────────────────────────────────────
     chroma_persist_dir:     str = str(DATA_DIR / "chroma_db")
@@ -89,10 +91,14 @@ def load_settings() -> Settings:
         qwen_api_key=student_id,
         qwen_base_url=os.getenv(
             "QWEN_BASE_URL",
-            "https://rsm-8430-lab2.bjlkeng.io/v1",
+            "https://rsm-8430-finalproject.bjlkeng.io/v1",
         ),
         llm_model=os.getenv("LLM_MODEL", "IGNORED"),
         llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
+        embedding_base_url=os.getenv(
+            "EMBEDDING_BASE_URL",
+            "https://rsm-8430-a2.bjlkeng.io/v1",
+        ),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5"),
         chroma_persist_dir=os.getenv(
             "CHROMA_PERSIST_DIR",

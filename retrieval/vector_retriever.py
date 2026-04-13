@@ -1,11 +1,11 @@
 """
 retrieval/vector_retriever.py
 ────────────────────────────────────────────────────────────────
-Semantic search over ChromaDB using local sentence-transformers.
+Semantic search over ChromaDB using the course A2 embeddings API.
 
-NOTE: Must use the same embedding model as ingestion.
-      Both use sentence-transformers/all-MiniLM-L6-v2 locally.
-      The course endpoint is only used for LLM generation.
+NOTE: Must use the same embedding endpoint + model as ingestion.
+      Both use https://rsm-8430-a2.bjlkeng.io/v1 with
+      BAAI/bge-base-en-v1.5 via the OpenAI-compatible API.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 from loguru import logger
 
 
@@ -48,7 +48,7 @@ class SearchResult:
 
 class VectorRetriever:
     """
-    Semantic search over ChromaDB using local sentence-transformers.
+    Semantic search over ChromaDB using the course A2 embeddings API.
 
     Usage:
         retriever = VectorRetriever(settings)
@@ -58,10 +58,12 @@ class VectorRetriever:
     def __init__(self, settings):
         logger.info("Initialising VectorRetriever")
 
-        # Local embedding model — same as used in ingestion
-        self.embedding_model = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2"
+        # A2 embeddings client — same endpoint and model used in ingestion
+        self.embed_client = OpenAI(
+            api_key=settings.qwen_api_key,
+            base_url=settings.embedding_base_url,
         )
+        self.embedding_model = settings.embedding_model
         self.top_k_retrieval = settings.top_k_retrieval
 
         # Connect to ChromaDB
@@ -98,12 +100,12 @@ class VectorRetriever:
 
         k = top_k or self.top_k_retrieval
 
-        # Embed query locally
-        query_embedding = self.embedding_model.encode(
-            query.strip(),
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        ).tolist()
+        # Embed query via A2 API
+        response = self.embed_client.embeddings.create(
+            model=self.embedding_model,
+            input=query.strip(),
+        )
+        query_embedding = response.data[0].embedding
 
         # Query ChromaDB
         raw = self.collection.query(

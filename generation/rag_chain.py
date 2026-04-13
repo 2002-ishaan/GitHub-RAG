@@ -196,13 +196,16 @@ class RAGChain:
             "what did you say", "what did you mention",
             "what were the steps", "what are the steps",
             "expand on", "elaborate", "go on", "what else",
+            "what else should i know", "what else should",
             "more details", "more detail",
             "first point", "second point", "third point", "last point",
             "can you explain more", "explain more",
             "continue", "and then", "what was that",
+            "anything else", "what more", "tell me anything",
         ]
         # Also match exact short phrases that are pure follow-ups
-        exact = {"go on", "continue", "and then", "what else", "tell me more"}
+        exact = {"go on", "continue", "and then", "what else", "tell me more",
+                 "what else should i know", "anything else"}
         if q in exact:
             return True
         return any(m in q for m in markers)
@@ -221,7 +224,7 @@ class RAGChain:
 
         filtered: List[SearchResult] = []
         for c in chunks:
-            if c.similarity_score < 0.42:
+            if c.similarity_score < 0.20:   # BGE/bge-base-en-v1.5 scores run lower than MiniLM
                 continue
             txt = c.text.lower()
             if is_repo_visibility and "github actions" in txt and "repository" not in txt and "visibility" not in txt:
@@ -280,7 +283,11 @@ class RAGChain:
             return question
 
         is_followup = self._is_summary_request(question)
-        is_short    = len(question.strip().split()) <= 8
+        # Only treat truly vague short phrases (≤ 4 words) as needing enrichment.
+        # Anything longer — even "How do I enable 2FA?" (6 words) — has enough
+        # semantic content to search on its own and must NOT be polluted with
+        # context from a previous unrelated question.
+        is_short    = len(question.strip().split()) <= 4
 
         if not is_followup and not is_short:
             return question
@@ -301,7 +308,7 @@ class RAGChain:
                     logger.debug(f"Follow-up (summary): reusing prior query '{content[:60]}'")
                     return content
                 else:
-                    # Short vague question → enrich with prior context
+                    # Truly vague short phrase → enrich with prior context
                     enriched = f"{content} {question}"
                     logger.debug(f"Follow-up (enriched): '{enriched[:80]}'")
                     return enriched

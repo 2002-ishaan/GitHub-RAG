@@ -375,6 +375,8 @@ def handle_check_billing(user_message: str, session_state, session_id: Optional[
         "check", "view", "see", "billing", "plan", "subscription",
         "what", "is", "for", "my", "the", "on", "using", "account",
         "github", "show", "get", "details",
+        # First-person pronouns — "what plan am I on?" must not extract "am" or "i"
+        "am", "i", "a",
         # Informational words — must never be extracted as usernames
         "how", "where", "do", "does", "can", "cancel", "cancellation", "refund",
         "request", "cost", "price", "pricing", "fee", "fees", "charge",
@@ -400,8 +402,8 @@ def handle_check_billing(user_message: str, session_state, session_id: Optional[
             "Say: *\"Create a support ticket\"*"
         )
 
-    # Session pronoun resolution
-    if session_id and re.search(r"\b(my|me|mine|current_user)\b", lower_msg):
+    # Session pronoun resolution — "my plan", "am I", "what plan am I on"
+    if session_id and re.search(r"\b(my|me|mine|current_user|am\s+i)\b", lower_msg):
         resolved = session_state.get_current_user(session_id)
         if resolved:
             username = resolved
