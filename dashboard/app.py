@@ -1502,15 +1502,22 @@ def main():
         with _hcol_export:
             st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
             if st.session_state.get("messages"):
-                _pdf_bytes = _generate_pdf(st.session_state.messages, session_id)
-                st.download_button(
-                    "📄",
-                    data=_pdf_bytes,
-                    file_name=f"conversation_{session_id}.pdf",
-                    mime="application/pdf",
-                    key="export_download",
-                    help="Download conversation as PDF",
-                )
+                try:
+                    _pdf_bytes = _generate_pdf(st.session_state.messages, session_id)
+                    st.download_button(
+                        "📄",
+                        data=_pdf_bytes,
+                        file_name=f"conversation_{session_id}.pdf",
+                        mime="application/pdf",
+                        key="export_download",
+                        help="Download conversation as PDF",
+                    )
+                except ModuleNotFoundError as _pdf_exc:
+                    logger.warning(f"PDF export unavailable: {_pdf_exc}")
+                    st.caption("PDF export unavailable in this deployment.")
+                except Exception as _pdf_exc:
+                    logger.warning(f"PDF export failed: {_pdf_exc}")
+                    st.caption("PDF export temporarily unavailable.")
 
         # ── Replay mode — renders instead of normal chat when active ──────
         if st.session_state.get("replay_mode"):
