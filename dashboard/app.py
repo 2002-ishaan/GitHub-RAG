@@ -1323,7 +1323,10 @@ def main():
         settings, prompts, rag_chain, intent_router, session_state = load_resources()
     except Exception as e:
         st.error(f"Failed to load resources: {e}")
-        st.info("Set QWEN_API_KEY and QWEN_BASE_URL in .env (local) or Streamlit Secrets (cloud), then run python -m ingestion.ingest so ChromaDB exists.")
+        st.info(
+            "Set QWEN_API_KEY and QWEN_BASE_URL in .env (local) or Streamlit Secrets (cloud). "
+            "If collection 'github_docs' is missing, ensure data/raw/github_docs/*.json is deployed so auto-ingestion can build ChromaDB."
+        )
         return
 
     jarvis_runtime = get_jarvis_runtime()

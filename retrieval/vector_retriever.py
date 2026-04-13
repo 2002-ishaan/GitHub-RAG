@@ -10,6 +10,7 @@ NOTE: Must use the same embedding endpoint + model as ingestion.
 """
 
 import sys
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
@@ -20,6 +21,8 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from openai import OpenAI
 from loguru import logger
+from ingestion.ingest import run_ingestion
+from ingestion.scraper import crawl
 
 
 @dataclass
@@ -57,6 +60,7 @@ class VectorRetriever:
 
     def __init__(self, settings):
         logger.info("Initialising VectorRetriever")
+        self.settings = settings
 
         # A2 embeddings client — same endpoint and model used in ingestion
         self.embed_client = OpenAI(
@@ -82,12 +86,68 @@ class VectorRetriever:
                 f"{self.collection.count()} chunks indexed"
             )
         except Exception as e:
-            logger.error(
-                f"ChromaDB collection '{settings.chroma_collection_name}' not found.\n"
-                f"Run: python -m ingestion.ingest\n"
-                f"Error: {e}"
+            logger.warning(
+                f"Collection '{settings.chroma_collection_name}' missing. "
+                "Attempting bootstrap ingestion."
             )
-            raise
+            if not self._bootstrap_collection():
+                logger.error(
+                    f"ChromaDB collection '{settings.chroma_collection_name}' not found.\n"
+                    f"Run: python -m ingestion.ingest\n"
+                    f"Error: {e}"
+                )
+                raise
+
+            self.collection = self.chroma_client.get_collection(
+                name=settings.chroma_collection_name
+            )
+            logger.success(
+                f"VectorRetriever recovered | "
+                f"collection='{settings.chroma_collection_name}' | "
+                f"{self.collection.count()} chunks indexed"
+            )
+
+    def _bootstrap_collection(self) -> bool:
+        """
+        Build Chroma collection once if it is missing.
+
+        This is useful on Streamlit Cloud where runtime storage starts empty.
+        """
+        auto_ingest = os.getenv("AUTO_INGEST_ON_MISSING_COLLECTION", "true").strip().lower()
+        if auto_ingest not in {"1", "true", "yes", "y", "on"}:
+            logger.info("AUTO_INGEST_ON_MISSING_COLLECTION is disabled.")
+            return False
+
+        project_root = Path(__file__).parent.parent
+        data_dir = project_root / "data"
+        raw_docs_dir = data_dir / "raw" / "github_docs"
+
+        json_docs = list(raw_docs_dir.glob("*.json")) if raw_docs_dir.exists() else []
+        if not json_docs:
+            auto_scrape = os.getenv("AUTO_SCRAPE_ON_MISSING_DOCS", "false").strip().lower()
+            if auto_scrape in {"1", "true", "yes", "y", "on"}:
+                logger.warning("Raw docs are missing. Running scraper bootstrap once.")
+                try:
+                    crawl()
+                    json_docs = list(raw_docs_dir.glob("*.json")) if raw_docs_dir.exists() else []
+                except Exception as exc:
+                    logger.error(f"Auto-scrape failed: {exc}")
+
+            if not json_docs:
+                logger.error(
+                    "Cannot auto-ingest: no raw docs found at "
+                    f"{raw_docs_dir}. Ensure data/raw/github_docs/*.json is available "
+                    "or enable AUTO_SCRAPE_ON_MISSING_DOCS=true."
+                )
+                return False
+
+        try:
+            Path(self.settings.chroma_persist_dir).mkdir(parents=True, exist_ok=True)
+            result = run_ingestion(data_dir, self.settings)
+            return result.get("status") == "success"
+        except Exception as exc:
+            logger.error(f"Auto-ingestion failed: {exc}")
+            return False
 
     def search(
         self,
