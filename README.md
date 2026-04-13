@@ -2,6 +2,8 @@
 
 A conversational RAG-based support agent built for the UofT Rotman LLM course (Team 11).
 
+> 🚀 **Live App:** [https://app-rag-nm2hjwl2nh5r6ogrib68df.streamlit.app/](https://app-rag-nm2hjwl2nh5r6ogrib68df.streamlit.app/)
+
 It answers GitHub documentation questions with citations, handles support operations (tickets, billing, user registration, plan upgrades), enforces guardrails, and supports voice I/O.
 
 ---
