@@ -27,6 +27,30 @@ DATA_DIR     = PROJECT_ROOT / "data"
 LOGS_DIR     = PROJECT_ROOT / "logs"
 
 
+def _get_config_value(key: str, default: str = "") -> str:
+    """
+    Read config from environment first, then Streamlit secrets.
+
+    This keeps local development (.env) and Streamlit Cloud deployments
+    working with the same settings module.
+    """
+    env_val = os.getenv(key)
+    if env_val is not None and str(env_val).strip():
+        return str(env_val).strip()
+
+    try:
+        import streamlit as st
+
+        secret_val = st.secrets.get(key)
+        if secret_val is not None and str(secret_val).strip():
+            return str(secret_val).strip()
+    except Exception:
+        # Streamlit may not be installed/running in non-UI contexts.
+        pass
+
+    return default
+
+
 def _read_student_id() -> str:
     """
     Read student ID from ID.txt (line 3).
@@ -37,8 +61,11 @@ def _read_student_id() -> str:
         lines = id_path.read_text().strip().splitlines()
         if len(lines) >= 3 and lines[2].strip():
             return lines[2].strip()
-    # Fallback
-    return os.getenv("QWEN_API_KEY", "")
+    # Fallbacks for deployments where ID.txt is intentionally not committed.
+    api_key = _get_config_value("QWEN_API_KEY", "")
+    if api_key:
+        return api_key
+    return _get_config_value("STUDENT_ID", "")
 
 
 class Settings(BaseModel):
@@ -89,33 +116,33 @@ def load_settings() -> Settings:
 
     return Settings(
         qwen_api_key=student_id,
-        qwen_base_url=os.getenv(
+        qwen_base_url=_get_config_value(
             "QWEN_BASE_URL",
             "https://rsm-8430-finalproject.bjlkeng.io/v1",
         ),
-        llm_model=os.getenv("LLM_MODEL", "IGNORED"),
-        llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
-        embedding_base_url=os.getenv(
+        llm_model=_get_config_value("LLM_MODEL", "IGNORED"),
+        llm_temperature=float(_get_config_value("LLM_TEMPERATURE", "0.0")),
+        embedding_base_url=_get_config_value(
             "EMBEDDING_BASE_URL",
             "https://rsm-8430-a2.bjlkeng.io/v1",
         ),
-        embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5"),
-        chroma_persist_dir=os.getenv(
+        embedding_model=_get_config_value("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5"),
+        chroma_persist_dir=_get_config_value(
             "CHROMA_PERSIST_DIR",
             str(DATA_DIR / "chroma_db"),
         ),
-        chroma_collection_name=os.getenv(
+        chroma_collection_name=_get_config_value(
             "CHROMA_COLLECTION_NAME",
             "github_docs",
         ),
-        top_k_retrieval=int(os.getenv("TOP_K_RETRIEVAL", "10")),
-        top_k_rerank=int(os.getenv("TOP_K_RERANK", "5")),
-        sqlite_db_path=os.getenv(
+        top_k_retrieval=int(_get_config_value("TOP_K_RETRIEVAL", "10")),
+        top_k_rerank=int(_get_config_value("TOP_K_RERANK", "5")),
+        sqlite_db_path=_get_config_value(
             "SQLITE_DB_PATH",
             str(DATA_DIR / "agent_state.db"),
         ),
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        log_dir=os.getenv("LOG_DIR", str(LOGS_DIR)),
+        log_level=_get_config_value("LOG_LEVEL", "INFO"),
+        log_dir=_get_config_value("LOG_DIR", str(LOGS_DIR)),
     )
 
 
