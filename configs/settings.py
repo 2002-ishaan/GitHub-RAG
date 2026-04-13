@@ -26,6 +26,9 @@ CONFIGS_DIR  = PROJECT_ROOT / "configs"
 DATA_DIR     = PROJECT_ROOT / "data"
 LOGS_DIR     = PROJECT_ROOT / "logs"
 
+COURSE_CHAT_BASE_URL = "https://rsm-8430-finalproject.bjlkeng.io/v1"
+COURSE_EMBED_BASE_URL = "https://rsm-8430-a2.bjlkeng.io/v1"
+
 
 def _get_config_value(key: str, default: str = "") -> str:
     """
@@ -68,6 +71,32 @@ def _read_student_id() -> str:
     return _get_config_value("STUDENT_ID", "")
 
 
+def _normalize_base_url(url: str) -> str:
+    """Normalize endpoint URL for stable equality checks."""
+    return (url or "").strip().rstrip("/")
+
+
+def _resolve_course_endpoint(env_key: str, expected_url: str) -> str:
+    """
+    Resolve endpoint with optional strict enforcement of course URLs.
+
+    By default, strict mode is enabled to keep demos compliant with the
+    professor's endpoint requirements.
+    """
+    configured = _get_config_value(env_key, expected_url)
+    strict_val = _get_config_value("STRICT_COURSE_ENDPOINTS", "true").lower()
+    strict_mode = strict_val in {"1", "true", "yes", "y", "on"}
+
+    if strict_mode and _normalize_base_url(configured) != _normalize_base_url(expected_url):
+        logger.warning(
+            f"{env_key}='{configured}' ignored because STRICT_COURSE_ENDPOINTS=true. "
+            f"Using required course endpoint '{expected_url}'."
+        )
+        return expected_url
+
+    return configured
+
+
 class Settings(BaseModel):
     """All runtime settings in one validated object."""
 
@@ -76,6 +105,7 @@ class Settings(BaseModel):
     qwen_base_url:   str   = "https://rsm-8430-finalproject.bjlkeng.io/v1"
     llm_model:       str   = "IGNORED"
     llm_temperature: float = 0.0
+    streaming_word_delay_sec: float = 0.02
 
     # ── Embeddings — A2 endpoint (per professor's instructions) ───────────
     embedding_base_url: str = "https://rsm-8430-a2.bjlkeng.io/v1"
@@ -113,19 +143,16 @@ class Settings(BaseModel):
 def load_settings() -> Settings:
     """Load and validate all settings."""
     student_id = _read_student_id()
+    qwen_base_url = _resolve_course_endpoint("QWEN_BASE_URL", COURSE_CHAT_BASE_URL)
+    embedding_base_url = _resolve_course_endpoint("EMBEDDING_BASE_URL", COURSE_EMBED_BASE_URL)
 
     return Settings(
         qwen_api_key=student_id,
-        qwen_base_url=_get_config_value(
-            "QWEN_BASE_URL",
-            "https://rsm-8430-finalproject.bjlkeng.io/v1",
-        ),
+        qwen_base_url=qwen_base_url,
         llm_model=_get_config_value("LLM_MODEL", "IGNORED"),
         llm_temperature=float(_get_config_value("LLM_TEMPERATURE", "0.0")),
-        embedding_base_url=_get_config_value(
-            "EMBEDDING_BASE_URL",
-            "https://rsm-8430-a2.bjlkeng.io/v1",
-        ),
+        streaming_word_delay_sec=float(_get_config_value("STREAMING_WORD_DELAY_SEC", "0.02")),
+        embedding_base_url=embedding_base_url,
         embedding_model=_get_config_value("EMBEDDING_MODEL", "BAAI/bge-base-en-v1.5"),
         chroma_persist_dir=_get_config_value(
             "CHROMA_PERSIST_DIR",

@@ -11,6 +11,7 @@ NOTE: Must use the same embedding endpoint + model as ingestion.
 
 import sys
 import os
+import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
@@ -23,6 +24,80 @@ from openai import OpenAI
 from loguru import logger
 from ingestion.ingest import run_ingestion
 from ingestion.scraper import crawl
+
+
+_NON_WORD_RE = re.compile(r"[^a-z0-9\s]+")
+_SPACE_RE = re.compile(r"\s+")
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+_QUERY_TYPO_MAP = {
+    "gihub": "github",
+    "gitub": "github",
+    "githb": "github",
+    "reposotory": "repository",
+    "repositry": "repository",
+    "repositary": "repository",
+    "authentification": "authentication",
+    "authenication": "authentication",
+    "authentcation": "authentication",
+    "prvate": "private",
+    "privte": "private",
+    "orgnization": "organization",
+    "organziation": "organization",
+    "orgainzation": "organization",
+    "permision": "permission",
+    "permissons": "permissions",
+    "biling": "billing",
+    "subscrption": "subscription",
+    "depedabot": "dependabot",
+    "repo": "repository",
+    "repos": "repositories",
+    "org": "organization",
+    "orgs": "organizations",
+    "auth": "authentication",
+    "tikcet": "ticket",
+    "tickt": "ticket",
+}
+
+_QUERY_PHRASE_MAP = {
+    "pullrequest": "pull request",
+    "pull-request": "pull request",
+    "pr": "pull request",
+    "prs": "pull requests",
+    "two factor": "two-factor",
+    "2 fa": "2fa",
+    "signin": "sign in",
+    "login": "log in",
+}
+
+
+def _normalize_query(text: str) -> str:
+    """Normalize user query text and fix common GitHub spelling mistakes."""
+    lowered = (text or "").lower().strip()
+    for src, dst in _QUERY_PHRASE_MAP.items():
+        lowered = re.sub(rf"\b{re.escape(src)}\b", dst, lowered)
+    lowered = _NON_WORD_RE.sub(" ", lowered)
+    lowered = _SPACE_RE.sub(" ", lowered).strip()
+    if not lowered:
+        return ""
+
+    tokens = lowered.split(" ")
+    fixed = [_QUERY_TYPO_MAP.get(t, t) for t in tokens]
+    return " ".join(fixed)
+
+
+def _token_set(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall((text or "").lower()))
+
+
+def _lexical_overlap_boost(query: str, doc: str) -> float:
+    """Small lexical bonus to improve robustness for exact/near-exact wording."""
+    q_tokens = _token_set(query)
+    if not q_tokens:
+        return 0.0
+    d_tokens = _token_set(doc)
+    overlap = len(q_tokens & d_tokens) / max(len(q_tokens), 1)
+    return min(0.12, overlap * 0.12)
 
 
 @dataclass
@@ -161,43 +236,71 @@ class VectorRetriever:
             return []
 
         k = top_k or self.top_k_retrieval
+        normalized_query = _normalize_query(query)
+        search_queries = [query.strip()]
+        if normalized_query and normalized_query != query.strip().lower():
+            search_queries.append(normalized_query)
 
-        # Embed query via A2 API
-        response = self.embed_client.embeddings.create(
-            model=self.embedding_model,
-            input=query.strip(),
-        )
-        query_embedding = response.data[0].embedding
+        # Deduplicate while preserving order.
+        seen_queries = set()
+        deduped_queries = []
+        for q in search_queries:
+            key = q.lower().strip()
+            if key in seen_queries:
+                continue
+            seen_queries.add(key)
+            deduped_queries.append(q)
 
-        # Query ChromaDB
-        raw = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(k, self.collection.count()),
-            include=["documents", "metadatas", "distances"],
-        )
+        if not deduped_queries:
+            return []
 
-        # Parse results
-        results = []
-        documents = raw.get("documents", [[]])[0]
-        metadatas = raw.get("metadatas", [[]])[0]
-        distances = raw.get("distances", [[]])[0]
+        target_n = min(max(k * 2, 8), max(self.collection.count(), 1))
+        merged: dict[str, SearchResult] = {}
 
-        for doc, meta, dist in zip(documents, metadatas, distances):
-            similarity = round(1 - (dist / 2), 4)
-            results.append(SearchResult(
-                chunk_id=meta.get("chunk_id", "unknown"),
-                text=doc,
-                source_file=meta.get("source_file", "unknown"),
-                page_number=int(meta.get("page_number", 0)),
-                similarity_score=similarity,
-                chunk_index=int(meta.get("chunk_index", 0)),
-                token_count=int(meta.get("token_count", 0)),
-            ))
+        for q in deduped_queries:
+            # Embed query via A2 API
+            response = self.embed_client.embeddings.create(
+                model=self.embedding_model,
+                input=q,
+            )
+            query_embedding = response.data[0].embedding
+
+            # Query ChromaDB
+            raw = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=target_n,
+                include=["documents", "metadatas", "distances"],
+            )
+
+            documents = raw.get("documents", [[]])[0]
+            metadatas = raw.get("metadatas", [[]])[0]
+            distances = raw.get("distances", [[]])[0]
+
+            for doc, meta, dist in zip(documents, metadatas, distances):
+                base_similarity = 1 - (dist / 2)
+                boosted = round(min(1.0, base_similarity + _lexical_overlap_boost(normalized_query or q, doc)), 4)
+                chunk_id = meta.get("chunk_id", "unknown")
+
+                candidate = SearchResult(
+                    chunk_id=chunk_id,
+                    text=doc,
+                    source_file=meta.get("source_file", "unknown"),
+                    page_number=int(meta.get("page_number", 0)),
+                    similarity_score=boosted,
+                    chunk_index=int(meta.get("chunk_index", 0)),
+                    token_count=int(meta.get("token_count", 0)),
+                )
+
+                existing = merged.get(chunk_id)
+                if not existing or candidate.similarity_score > existing.similarity_score:
+                    merged[chunk_id] = candidate
+        results = list(merged.values())
 
         results.sort(key=lambda r: r.similarity_score, reverse=True)
+        results = results[:k]
 
         logger.info(
-            f"Query: '{query[:60]}' | "
+            f"Query: '{query[:60]}' | norm='{(normalized_query or query)[:60]}' | "
             f"{len(results)} chunks | "
             f"top score: {results[0].similarity_score if results else 'N/A'}"
         )

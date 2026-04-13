@@ -26,6 +26,38 @@ from openai import OpenAI
 from loguru import logger
 
 
+_INTENT_TEXT_REPLACEMENTS = {
+    "gihub": "github",
+    "gitub": "github",
+    "reposotory": "repository",
+    "repositry": "repository",
+    "repo": "repository",
+    "repos": "repositories",
+    "org": "organization",
+    "orgs": "organizations",
+    "pr": "pull request",
+    "prs": "pull requests",
+    "tikcet": "ticket",
+    "tickt": "ticket",
+    "biling": "billing",
+    "subscrption": "subscription",
+    "authentification": "authentication",
+    "auth": "authentication",
+    "signin": "sign in",
+    "login": "log in",
+    "2 fa": "2fa",
+    "two factor": "two-factor",
+}
+
+
+def _normalize_intent_text(message: str) -> str:
+    """Normalize message text before regex-based intent checks."""
+    normalized = " ".join((message or "").lower().strip().split())
+    for src, dst in _INTENT_TEXT_REPLACEMENTS.items():
+        normalized = re.sub(rf"\b{re.escape(src)}\b", dst, normalized)
+    return normalized
+
+
 _GITHUB_DOMAIN_HINT_RE = re.compile(
     r"\b(github|repository|repo|organization|team|billing|plan|authentication|2fa|security|issues|pull\s*request|actions)\b",
     re.IGNORECASE,
@@ -69,6 +101,7 @@ CHECK_TICKET_PATTERNS = [
     r"\b(check|view|see|status\s+of)\s+(ticket|tkt)[- ]?\w*\b",
     r"\btkt[-\s]?\d+\b",
     r"\bmy\s+ticket\s+status\b",
+    r"\bticket\s+status\b",
 ]
 
 BILLING_PATTERNS = [
@@ -214,7 +247,7 @@ UPGRADE_PLAN_PATTERNS = [
 
 def _regex_check(message: str) -> str | None:
     """Fast regex pre-check. Returns intent string or None."""
-    msg_lower = message.lower()
+    msg_lower = _normalize_intent_text(message)
 
 
     for pattern in INJECTION_PATTERNS:
@@ -330,7 +363,9 @@ class IntentRouter:
                 max_tokens=50,
             )
 
-            raw = response.choices[0].message.content.strip()
+            raw = (response.choices[0].message.content or "").strip()
+            if not raw:
+                raise ValueError("empty classifier response")
 
             # Parse JSON response
             # Strip markdown code fences if present

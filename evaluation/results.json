@@ -1,5 +1,5 @@
 {
-  "session_id": "eval_524164",
+  "session_id": "eval_de370e",
   "total": 15,
   "passed": 15,
   "success_rate": 100.0,
@@ -13,7 +13,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 3.17
+      "time_sec": 14.09
     },
     {
       "id": 2,
@@ -24,7 +24,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 5.01
+      "time_sec": 6.2
     },
     {
       "id": 3,
@@ -35,7 +35,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 3.21
+      "time_sec": 12.79
     },
     {
       "id": 4,
@@ -46,7 +46,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 1.87
+      "time_sec": 6.8
     },
     {
       "id": 5,
@@ -156,7 +156,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 1.16
+      "time_sec": 4.8
     },
     {
       "id": 15,
@@ -167,7 +167,7 @@
       "actual_intent": "rag_query",
       "passed": true,
       "failure_reason": "",
-      "time_sec": 0.51
+      "time_sec": 9.43
     }
   ]
 }

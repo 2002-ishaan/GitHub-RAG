@@ -409,7 +409,11 @@ class JarvisCore:
                 session_id=session_id,
                 session_state=self.session_state,
             )
-            response = rag_response.formatted_answer() if rag_response.is_supported else handle_insufficient_evidence(self.prompts)
+            response = (
+                rag_response.formatted_answer()
+                if rag_response.is_supported
+                else handle_insufficient_evidence(self.prompts, user_input)
+            )
 
         self.session_state.append_to_history(session_id, "user", user_input)
         self.session_state.append_to_history(session_id, "assistant", response)

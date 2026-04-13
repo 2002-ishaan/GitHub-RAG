@@ -90,6 +90,25 @@ class StreamingSetup:
 _URL_RE = re.compile(r'https?://[^\s\)\]>]+')
 _INLINE_SOURCE_CITE_RE = re.compile(r'\[Source:\s*([^,\]]+),\s*(https?://[^\]\s]+)\]')
 _PLACEHOLDER_CITE_RE = re.compile(r'\[Source:\s*<title>,\s*<url>\]')
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+_ALIGNMENT_STOPWORDS = {
+    "how", "what", "when", "where", "why", "who", "which", "is", "are", "am",
+    "to", "for", "of", "on", "in", "with", "my", "your", "the", "a", "an",
+    "do", "does", "can", "i", "we", "it", "that", "this", "and", "or",
+}
+
+_FALLBACK_BLOCKLIST = {
+    "salary", "salaries", "employee", "employees", "internal", "confidential",
+    "payroll", "compensation", "benefits", "password", "private", "secret",
+}
+
+_GITHUB_DOC_HINTS = {
+    "repository", "repositories", "organization", "organizations", "team", "teams",
+    "pull", "request", "issue", "actions", "workflow", "billing", "plan",
+    "authentication", "2fa", "security", "dependabot", "codeowners", "branch",
+    "token", "ssh", "release", "permissions", "projects",
+}
 
 
 def _url_to_label(url: str) -> str:
@@ -216,15 +235,23 @@ class RAGChain:
         Keeps behavior conservative to reduce irrelevant citations.
         """
         q = question.lower()
+        token_count = len(question.strip().split())
         is_repo_visibility = (
             "private repo" in q
             or "repository visibility" in q
             or ("repository" in q and "private" in q)
         )
+        # Short/noisy questions are naturally less semantically stable.
+        min_similarity = 0.16 if token_count <= 5 else 0.20
 
         filtered: List[SearchResult] = []
-        for c in chunks:
-            if c.similarity_score < 0.20:   # BGE/bge-base-en-v1.5 scores run lower than MiniLM
+        for idx, c in enumerate(chunks):
+            # Always retain top-1 chunk unless it's extremely weak.
+            if idx == 0 and c.similarity_score >= 0.10:
+                filtered.append(c)
+                continue
+
+            if c.similarity_score < min_similarity:   # BGE/bge-base-en-v1.5 scores run lower than MiniLM
                 continue
             txt = c.text.lower()
             if is_repo_visibility and "github actions" in txt and "repository" not in txt and "visibility" not in txt:
@@ -259,7 +286,8 @@ class RAGChain:
             temperature=self.settings.llm_temperature,
             max_tokens=512,
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content
+        return (content or "").strip()
 
     def _resolve_search_query(
         self,
@@ -325,6 +353,59 @@ class RAGChain:
             return False
         return True
 
+    def _build_extractive_fallback(self, question: str, chunks: List[SearchResult]) -> str:
+        """
+        Build a safe extractive answer directly from retrieved chunks.
+
+        This is used when the model returns empty/insufficient output even
+        though retrieval is highly relevant.
+        """
+        if not chunks:
+            return "INSUFFICIENT_EVIDENCE"
+
+        top = chunks[0].text.strip()
+        if not top:
+            return "INSUFFICIENT_EVIDENCE"
+
+        compact = re.sub(r"\s+", " ", top)
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", compact) if s.strip()]
+
+        selected = sentences[:2] if len(sentences) >= 2 else [compact[:420]]
+        bullet_lines = [f"- {line}" for line in selected if line]
+
+        return (
+            f"I found relevant guidance in GitHub documentation for: {question}\n\n"
+            + "\n".join(bullet_lines)
+            + "\n\n"
+            + "If you want, I can provide a shorter step-by-step version."
+        )
+
+    def _has_lexical_alignment(self, question: str, top_chunk_text: str) -> bool:
+        """Check whether query and top chunk share enough content words."""
+        q_tokens = {
+            t for t in _TOKEN_RE.findall((question or "").lower())
+            if t not in _ALIGNMENT_STOPWORDS and len(t) > 2
+        }
+        if not q_tokens:
+            return False
+
+        d_tokens = set(_TOKEN_RE.findall((top_chunk_text or "").lower()))
+        overlap_ratio = len(q_tokens & d_tokens) / max(len(q_tokens), 1)
+        return overlap_ratio >= 0.20
+
+    def _is_safe_for_extractive_fallback(self, question: str) -> bool:
+        """Allow fallback only for likely GitHub documentation queries."""
+        q_tokens = set(_TOKEN_RE.findall((question or "").lower()))
+        if not q_tokens:
+            return False
+
+        # Never use extractive fallback for likely internal/sensitive requests.
+        if q_tokens & _FALLBACK_BLOCKLIST:
+            return False
+
+        # Require at least one GitHub-doc keyword beyond generic "github".
+        return bool(q_tokens & _GITHUB_DOC_HINTS)
+
     def ask(
         self,
         question: str,
@@ -385,6 +466,20 @@ class RAGChain:
         logger.info(f"Calling {self.settings.llm_model}...")
         answer    = self._call_llm(messages)
         supported = self._is_supported(answer)
+
+        if (
+            not supported
+            and chunks
+            and chunks[0].similarity_score >= 0.75
+            and self._is_safe_for_extractive_fallback(question)
+            and self._has_lexical_alignment(question, top_chunks[0].text)
+        ):
+            logger.warning(
+                "LLM returned unsupported output despite high retrieval score; "
+                "using extractive fallback."
+            )
+            answer = self._build_extractive_fallback(question, top_chunks)
+            supported = self._is_supported(answer)
 
         if not supported:
             log_path = Path(self.settings.log_dir) / "declined_queries.log"
@@ -468,11 +563,30 @@ class RAGChain:
         # it progressively, exactly like ChatGPT-style typewriter output.
         def _token_gen() -> Generator[str, None, None]:
             answer = self._call_llm(messages)
+            supported = self._is_supported(answer)
+            if (
+                not supported
+                and top_chunks
+                and top_chunks[0].similarity_score >= 0.75
+                and self._is_safe_for_extractive_fallback(question)
+                and self._has_lexical_alignment(question, top_chunks[0].text)
+            ):
+                logger.warning(
+                    "Streaming LLM output unsupported despite high retrieval score; "
+                    "using extractive fallback."
+                )
+                answer = self._build_extractive_fallback(question, top_chunks)
+
+            delay_sec = max(0.0, float(getattr(self.settings, "streaming_word_delay_sec", 0.0)))
+            if delay_sec <= 0:
+                yield answer
+                return
+
             words  = answer.split(" ")
             for i, word in enumerate(words):
                 # Preserve trailing space on every word except the last
                 yield word if i == len(words) - 1 else word + " "
-                time.sleep(0.02)   # ~50 words/sec — natural reading pace
+                time.sleep(delay_sec)
 
         return StreamingSetup(
             sources=top_chunks,

@@ -427,7 +427,7 @@ def process_message(
         if rag_response.is_supported:
             response = rag_response.formatted_answer()
         else:
-            response = handle_insufficient_evidence(prompts)
+            response = handle_insufficient_evidence(prompts, user_input)
 
     # Save to persistent history
     session_state.append_to_history(session_id, "user", user_input)
@@ -440,7 +440,7 @@ def process_message(
 _FRUSTRATION_PATTERNS = [
     r"\bugh\b", r"\bstill\s+not\s+working\b", r"\bstill\s+don.t\s+understand\b",
     r"\bdoesn.t\s+work\b", r"\bnot\s+working\b", r"\bfrustrat\w+\b",
-    r"\bstuck\b", r"\bwtf\b", r"\bffs\b", r"\bannoying\b",
+    r"\bwtf\b", r"\bffs\b", r"\bannoying\b",
     r"\buseless\b", r"\bdoesn.t\s+make\s+sense\b", r"\bwhy\s+isn.t\s+this\b",
 ]
 
@@ -459,23 +459,41 @@ _ACTION_COMMAND_RE = re.compile(
 def _is_frustrated(user_input: str, messages: list) -> bool:
     """Detect frustration via keywords or same question asked twice in recent history."""
     lower = user_input.lower()
+    compact = " ".join(lower.split())
+
     for pat in _FRUSTRATION_PATTERNS:
         if re.search(pat, lower):
             return True
+
+    # Only treat explicit "stuck" as frustration when accompanied by negative context.
+    if "stuck" in lower and re.search(r"\b(stuck|blocked)\b.*\b(again|still|help|issue|problem)\b", lower):
+        return True
+
     # Action commands (billing, upgrade, register, etc.) are naturally repeated —
     # skip the similarity check so they never get misrouted as frustrated RAG queries.
     if _ACTION_COMMAND_RE.search(user_input):
         return False
-    # Same question repeated (> 75% similarity) in last 6 user messages
+
+    # Very short prompts are often follow-ups, not frustration.
+    if len(compact) < 18:
+        return False
+
+    # Same question repeated with very high similarity in recent user messages.
     recent_user = [
-        m["content"].lower()[:80]
+        " ".join(m["content"].lower().split())[:120]
         for m in messages[-6:]
         if m["role"] == "user"
     ]
-    for prev in recent_user[:-1]:
-        if difflib.SequenceMatcher(None, prev, lower[:80]).ratio() > 0.75:
-            return True
-    return False
+
+    similar_count = 0
+    for prev in recent_user:
+        if len(prev) < 18:
+            continue
+        if difflib.SequenceMatcher(None, prev, compact[:120]).ratio() >= 0.90:
+            similar_count += 1
+
+    # Require at least two near-identical retries before calling it frustration.
+    return similar_count >= 2
 
 
 # ── Comparative question detection ────────────────────────────────────────────
@@ -1938,7 +1956,7 @@ def main():
                 if _use_streaming:
                     # ── Streaming RAG path ─────────────────────────────────────
                     intent      = "rag_query"
-                    response    = handle_insufficient_evidence(prompts)  # safe default
+                    response    = handle_insufficient_evidence(prompts, user_input)  # safe default
                     full_answer = ""   # populated on successful stream
                     _answered   = False
 
@@ -1964,7 +1982,7 @@ def main():
                                 "INSUFFICIENT_EVIDENCE" in full_answer.upper()
                                 or len(full_answer.strip()) < 20
                             ):
-                                st.markdown(handle_insufficient_evidence(prompts))
+                                st.markdown(handle_insufficient_evidence(prompts, user_input))
                             else:
                                 _render_stream_footer(stream_setup.sources, elapsed, top_sim)
                                 response  = _build_stream_response(
@@ -1979,10 +1997,10 @@ def main():
                                 response = (
                                     _fb.formatted_answer()
                                     if _fb.is_supported
-                                    else handle_insufficient_evidence(prompts)
+                                    else handle_insufficient_evidence(prompts, user_input)
                                 )
                             except Exception:
-                                response = handle_insufficient_evidence(prompts)
+                                response = handle_insufficient_evidence(prompts, user_input)
                             st.markdown(response)
                     else:
                         st.markdown(response)
