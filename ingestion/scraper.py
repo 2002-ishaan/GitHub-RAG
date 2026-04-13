@@ -336,7 +336,7 @@ def extract_content(soup: BeautifulSoup, url: str) -> Optional[dict]:
 # ── Main crawler ───────────────────────────────────────────────────────────────
 
 
-def crawl() -> None:
+def crawl(max_pages: int = MAX_PAGES, delay_seconds: float = DELAY_SECONDS) -> None:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     visited: set[str]  = set()
@@ -347,10 +347,10 @@ def crawl() -> None:
     log.info("=" * 65)
     log.info("GitHub Docs Knowledge Base Crawler")
     log.info("Topics : Get Started | Repos | Billing | Auth | Orgs | Security")
-    log.info("Max pages : %d  |  Output: %s/", MAX_PAGES, OUTPUT_DIR)
+    log.info("Max pages : %d  |  Output: %s/", max_pages, OUTPUT_DIR)
     log.info("=" * 65)
 
-    while queue and len(visited) < MAX_PAGES:
+    while queue and len(visited) < max_pages:
         url = queue.pop(0)
 
         # Skip binary files immediately without fetching
@@ -366,7 +366,7 @@ def crawl() -> None:
         soup = fetch(url)
         if not soup:
             skipped += 1
-            time.sleep(DELAY_SECONDS)
+            time.sleep(delay_seconds)
             continue
 
         # Discover new in-scope links
@@ -397,7 +397,7 @@ def crawl() -> None:
             skipped += 1
             log.debug("  – No content: %s", url)
 
-        time.sleep(DELAY_SECONDS)
+        time.sleep(delay_seconds)
 
     # ── Summary ────────────────────────────────────────────────────────────
     log.info("=" * 65)

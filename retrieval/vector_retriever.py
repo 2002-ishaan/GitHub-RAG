@@ -124,11 +124,13 @@ class VectorRetriever:
 
         json_docs = list(raw_docs_dir.glob("*.json")) if raw_docs_dir.exists() else []
         if not json_docs:
-            auto_scrape = os.getenv("AUTO_SCRAPE_ON_MISSING_DOCS", "false").strip().lower()
+            auto_scrape = os.getenv("AUTO_SCRAPE_ON_MISSING_DOCS", "true").strip().lower()
             if auto_scrape in {"1", "true", "yes", "y", "on"}:
                 logger.warning("Raw docs are missing. Running scraper bootstrap once.")
                 try:
-                    crawl()
+                    bootstrap_max_pages = int(os.getenv("BOOTSTRAP_MAX_PAGES", "80"))
+                    bootstrap_delay = float(os.getenv("BOOTSTRAP_CRAWL_DELAY_SECONDS", "0.2"))
+                    crawl(max_pages=bootstrap_max_pages, delay_seconds=bootstrap_delay)
                     json_docs = list(raw_docs_dir.glob("*.json")) if raw_docs_dir.exists() else []
                 except Exception as exc:
                     logger.error(f"Auto-scrape failed: {exc}")
