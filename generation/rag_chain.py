@@ -657,16 +657,58 @@ class RAGChain:
             {"role": "user",   "content": user_text},
         ]
 
+        def _default_followups(seed_question: str) -> List[str]:
+            q = (seed_question or "").lower()
+
+            if any(k in q for k in ["2fa", "two-factor", "authentication", "token", "ssh", "security"]):
+                return [
+                    "How can I verify 2FA is enabled correctly?",
+                    "What recovery options should I set up for account access?",
+                    "Where can I manage authentication settings on GitHub?",
+                ]
+
+            if any(k in q for k in ["billing", "plan", "subscription", "refund", "invoice", "payment"]):
+                return [
+                    "How can I review my current plan details and limits?",
+                    "Where can I update billing contacts and payment methods?",
+                    "What changes when upgrading or downgrading plans?",
+                ]
+
+            if any(k in q for k in ["ticket", "support", "issue", "tkt-"]):
+                return [
+                    "How can I check the status of my support ticket?",
+                    "What details should I include to speed up ticket resolution?",
+                    "How do I close a resolved ticket?",
+                ]
+
+            if any(k in q for k in ["repository", "repo", "branch", "pull request", "pr", "issue", "actions"]):
+                return [
+                    "What are common mistakes when doing this on GitHub?",
+                    "How can I verify this was configured correctly?",
+                    "Where can I manage this setting in GitHub?",
+                ]
+
+            return [
+                "What is the recommended workflow for this on GitHub?",
+                "How can I validate this setup after making changes?",
+                "What related GitHub setting should I review next?",
+            ]
+
         try:
             raw = self.client.chat.completions.create(
                 model=self.settings.llm_model,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=150,
-            ).choices[0].message.content.strip()
+            ).choices[0].message.content
+
+            raw_text = (raw or "").strip()
+            if not raw_text:
+                logger.warning("suggest_followups got empty LLM output; using defaults")
+                return _default_followups(question)
 
             questions = []
-            for line in raw.splitlines():
+            for line in raw_text.splitlines():
                 line = line.strip()
                 if not line:
                     continue
@@ -680,9 +722,28 @@ class RAGChain:
                 if len(questions) == 3:
                     break
 
+            # Some models return one paragraph instead of line-separated questions.
+            if len(questions) < 3:
+                sentence_candidates = re.split(r'\?\s+|\n|;\s+', raw_text)
+                for candidate in sentence_candidates:
+                    c = candidate.strip().strip('"\'')
+                    c = re.sub(r'^[\d]+[.)]\s*', '', c)
+                    c = re.sub(r'^[-•→]\s*', '', c)
+                    if not c:
+                        continue
+                    if not c.endswith("?"):
+                        c = c + "?"
+                    if len(c) > 8 and c not in questions:
+                        questions.append(c)
+                    if len(questions) == 3:
+                        break
+
+            if not questions:
+                return _default_followups(question)
+
             logger.debug(f"Follow-up suggestions: {questions}")
-            return questions
+            return questions[:3]
 
         except Exception as exc:
             logger.warning(f"suggest_followups failed: {exc}")
-            return []
+            return _default_followups(question)
