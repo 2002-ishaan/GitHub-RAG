@@ -100,7 +100,7 @@ _ALIGNMENT_STOPWORDS = {
 
 _FALLBACK_BLOCKLIST = {
     "salary", "salaries", "employee", "employees", "internal", "confidential",
-    "payroll", "compensation", "benefits", "password", "private", "secret",
+    "payroll", "compensation", "benefits", "password", "private",
 }
 
 _GITHUB_DOC_HINTS = {
@@ -108,6 +108,7 @@ _GITHUB_DOC_HINTS = {
     "pull", "request", "issue", "actions", "workflow", "billing", "plan",
     "authentication", "2fa", "security", "dependabot", "codeowners", "branch",
     "token", "ssh", "release", "permissions", "projects",
+    "secret", "secrets", "key", "keys", "credential", "credentials",
 }
 
 

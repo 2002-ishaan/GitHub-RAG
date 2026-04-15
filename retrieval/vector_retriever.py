@@ -68,6 +68,9 @@ _QUERY_PHRASE_MAP = {
     "2 fa": "2fa",
     "signin": "sign in",
     "login": "log in",
+    "secret key": "repository secret",
+    "remove secret": "delete secret",
+    "remove key": "delete key",
 }
 
 

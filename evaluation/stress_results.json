@@ -4,9 +4,9 @@
     "intent_pass": 64,
     "intent_accuracy": 100.0,
     "rag_checked": 49,
-    "rag_supported": 48,
-    "rag_support_rate": 97.96,
-    "avg_intent_latency_sec": 0.802
+    "rag_supported": 40,
+    "rag_support_rate": 81.63,
+    "avg_intent_latency_sec": 0.915
   },
   "results": [
     {
@@ -19,7 +19,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 1.139
+      "latency_sec": 1.588
     },
     {
       "id": 2,
@@ -31,7 +31,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 1.125
+      "latency_sec": 1.238
     },
     {
       "id": 3,
@@ -43,7 +43,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9784,
-      "latency_sec": 1.044
+      "latency_sec": 1.045
     },
     {
       "id": 4,
@@ -55,7 +55,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9602,
-      "latency_sec": 1.062
+      "latency_sec": 1.843
     },
     {
       "id": 5,
@@ -67,7 +67,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9798,
-      "latency_sec": 0.739
+      "latency_sec": 1.375
     },
     {
       "id": 6,
@@ -79,7 +79,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 0.92
+      "latency_sec": 1.125
     },
     {
       "id": 7,
@@ -91,7 +91,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9809,
-      "latency_sec": 0.924
+      "latency_sec": 1.628
     },
     {
       "id": 8,
@@ -103,7 +103,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9572,
-      "latency_sec": 0.926
+      "latency_sec": 1.113
     },
     {
       "id": 9,
@@ -115,7 +115,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.982,
-      "latency_sec": 0.818
+      "latency_sec": 1.179
     },
     {
       "id": 10,
@@ -127,7 +127,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9825,
-      "latency_sec": 1.009
+      "latency_sec": 2.402
     },
     {
       "id": 11,
@@ -139,7 +139,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 1.216
+      "latency_sec": 1.128
     },
     {
       "id": 12,
@@ -151,7 +151,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9888,
-      "latency_sec": 1.228
+      "latency_sec": 0.941
     },
     {
       "id": 13,
@@ -163,7 +163,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9646,
-      "latency_sec": 1.231
+      "latency_sec": 1.089
     },
     {
       "id": 14,
@@ -173,9 +173,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.9098,
-      "latency_sec": 0.813
+      "latency_sec": 1.124
     },
     {
       "id": 15,
@@ -187,7 +187,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 0.829
+      "latency_sec": 1.182
     },
     {
       "id": 16,
@@ -197,9 +197,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.9754,
-      "latency_sec": 0.923
+      "latency_sec": 1.096
     },
     {
       "id": 17,
@@ -211,7 +211,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9683,
-      "latency_sec": 1.558
+      "latency_sec": 1.539
     },
     {
       "id": 18,
@@ -223,7 +223,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 1.016
+      "latency_sec": 1.347
     },
     {
       "id": 19,
@@ -235,7 +235,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9503,
-      "latency_sec": 1.32
+      "latency_sec": 0.864
     },
     {
       "id": 20,
@@ -247,7 +247,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.942,
-      "latency_sec": 1.243
+      "latency_sec": 1.101
     },
     {
       "id": 21,
@@ -259,7 +259,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9727,
-      "latency_sec": 1.118
+      "latency_sec": 1.022
     },
     {
       "id": 22,
@@ -269,9 +269,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.8947,
-      "latency_sec": 1.232
+      "latency_sec": 1.048
     },
     {
       "id": 23,
@@ -283,7 +283,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 1.323
+      "latency_sec": 1.233
     },
     {
       "id": 24,
@@ -295,7 +295,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9251,
-      "latency_sec": 1.333
+      "latency_sec": 0.867
     },
     {
       "id": 25,
@@ -319,7 +319,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9445,
-      "latency_sec": 0.926
+      "latency_sec": 0.988
     },
     {
       "id": 27,
@@ -331,7 +331,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9904,
-      "latency_sec": 0.99
+      "latency_sec": 1.687
     },
     {
       "id": 28,
@@ -341,9 +341,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.9356,
-      "latency_sec": 1.215
+      "latency_sec": 1.176
     },
     {
       "id": 29,
@@ -355,7 +355,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9334,
-      "latency_sec": 1.143
+      "latency_sec": 1.383
     },
     {
       "id": 30,
@@ -367,7 +367,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.8988,
-      "latency_sec": 0.902
+      "latency_sec": 1.125
     },
     {
       "id": 31,
@@ -379,7 +379,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9859,
-      "latency_sec": 1.433
+      "latency_sec": 1.74
     },
     {
       "id": 32,
@@ -391,7 +391,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9538,
-      "latency_sec": 1.331
+      "latency_sec": 1.511
     },
     {
       "id": 33,
@@ -403,7 +403,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9312,
-      "latency_sec": 1.125
+      "latency_sec": 1.02
     },
     {
       "id": 34,
@@ -415,7 +415,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9511,
-      "latency_sec": 1.228
+      "latency_sec": 1.051
     },
     {
       "id": 35,
@@ -425,9 +425,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.9164,
-      "latency_sec": 1.339
+      "latency_sec": 1.002
     },
     {
       "id": 36,
@@ -439,7 +439,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9478,
-      "latency_sec": 1.169
+      "latency_sec": 1.444
     },
     {
       "id": 37,
@@ -451,7 +451,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9285,
-      "latency_sec": 0.0
+      "latency_sec": 0.001
     },
     {
       "id": 38,
@@ -475,7 +475,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.8738,
-      "latency_sec": 1.122
+      "latency_sec": 1.254
     },
     {
       "id": 40,
@@ -485,9 +485,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.92,
-      "latency_sec": 1.222
+      "latency_sec": 1.354
     },
     {
       "id": 41,
@@ -497,9 +497,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.9691,
-      "latency_sec": 0.887
+      "latency_sec": 1.074
     },
     {
       "id": 42,
@@ -511,7 +511,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9623,
-      "latency_sec": 1.159
+      "latency_sec": 1.879
     },
     {
       "id": 43,
@@ -521,9 +521,9 @@
       "expected_intent": "rag_query",
       "actual_intent": "rag_query",
       "intent_pass": true,
-      "rag_supported": true,
+      "rag_supported": false,
       "top_similarity": 0.8632,
-      "latency_sec": 1.011
+      "latency_sec": 0.751
     },
     {
       "id": 44,
@@ -535,7 +535,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 0.78
+      "latency_sec": 1.303
     },
     {
       "id": 45,
@@ -571,7 +571,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9209,
-      "latency_sec": 1.226
+      "latency_sec": 1.493
     },
     {
       "id": 48,
@@ -583,7 +583,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9862,
-      "latency_sec": 1.32
+      "latency_sec": 1.078
     },
     {
       "id": 49,
@@ -595,7 +595,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9808,
-      "latency_sec": 0.908
+      "latency_sec": 1.059
     },
     {
       "id": 50,
@@ -607,7 +607,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 1.0,
-      "latency_sec": 0.912
+      "latency_sec": 0.764
     },
     {
       "id": 51,
@@ -619,7 +619,7 @@
       "intent_pass": true,
       "rag_supported": false,
       "top_similarity": 0.8928,
-      "latency_sec": 0.779
+      "latency_sec": 1.175
     },
     {
       "id": 52,
@@ -643,7 +643,7 @@
       "intent_pass": true,
       "rag_supported": true,
       "top_similarity": 0.9399,
-      "latency_sec": 1.08
+      "latency_sec": 1.102
     },
     {
       "id": 54,

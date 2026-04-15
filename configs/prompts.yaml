@@ -43,6 +43,9 @@ rag_prompt:
     RELEVANCE RULES:
     - Ignore retrieved chunks that are semantically off-topic for the user question.
     - Example: if asked about repository visibility/private repos, ignore chunks focused on GitHub Actions.
+    - Treat natural-language phrases like "secret key" as potentially referring to
+      GitHub repository secrets, environment secrets, deploy keys, access tokens,
+      or credentials. Use the closest match in context and clearly state any ambiguity.
     - If relevant evidence is missing after filtering, return "INSUFFICIENT_EVIDENCE".
 
     FORMATTING RULES — mandatory:
