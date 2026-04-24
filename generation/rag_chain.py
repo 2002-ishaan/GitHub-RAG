@@ -312,11 +312,11 @@ class RAGChain:
             return question
 
         is_followup = self._is_summary_request(question)
-        # Only treat truly vague short phrases (≤ 4 words) as needing enrichment.
-        # Anything longer — even "How do I enable 2FA?" (6 words) — has enough
-        # semantic content to search on its own and must NOT be polluted with
-        # context from a previous unrelated question.
-        is_short    = len(question.strip().split()) <= 4
+        # Treat short/vague questions (≤ 6 words) as needing enrichment with
+        # prior context. This catches natural follow-ups like "how does that work?"
+        # or "what about security?" that aren't in the summary-request marker list
+        # but clearly refer to the previous topic.
+        is_short    = len(question.strip().split()) <= 6
 
         if not is_followup and not is_short:
             return question

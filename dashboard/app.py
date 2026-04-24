@@ -374,6 +374,7 @@ def process_message(
 
     # ── Route to handler ───────────────────────────────────────────────────
     intent = intent_result.intent
+    _hist_response = None   # set to clean answer text for RAG; None = save response as-is
 
     if intent == "create_ticket":
         response = handle_create_ticket(
@@ -426,12 +427,14 @@ def process_message(
         )
         if rag_response.is_supported:
             response = rag_response.formatted_answer()
+            _hist_response = rag_response.answer   # clean text, no sources/confidence noise
         else:
             response = handle_insufficient_evidence(prompts, user_input)
 
-    # Save to persistent history
+    # Save to persistent history — use clean answer text for RAG so follow-up
+    # turns get readable context instead of markdown citation noise.
     session_state.append_to_history(session_id, "user", user_input)
-    session_state.append_to_history(session_id, "assistant", response)
+    session_state.append_to_history(session_id, "assistant", _hist_response or response)
 
     return response, intent
 
@@ -2063,8 +2066,11 @@ def main():
 
                     # Persist turn then rerun — messages loop will render the
                     # follow-up buttons alongside the new assistant message.
+                    # Store clean answer text (not the formatted version with
+                    # sources/confidence) so follow-up turns get readable context.
+                    _hist_asst = full_answer if (_answered and full_answer) else response
                     session_state.append_to_history(session_id, "user", user_input)
-                    session_state.append_to_history(session_id, "assistant", response)
+                    session_state.append_to_history(session_id, "assistant", _hist_asst)
                     st.session_state.messages.append({
                         "role": "assistant", "content": response,
                         "intent": intent, "sources": _src_data,
